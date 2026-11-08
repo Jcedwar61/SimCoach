@@ -1,9 +1,9 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
-## Download
-
-* [Download SimCoach-Setup.exe (Windows Installer)](SimCoach-Setup.exe)
-* [Latest Release & Full ZIP](../../releases/latest)
+### Download & Preview
+* **[Download SimCoach-Setup.exe (Windows Installer)](SimCoach-Setup.exe)**
+* **[Latest Release & Full ZIP](../../releases/latest)**
+* **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 
 * **Install:** Run `SimCoach-Setup.exe` (no admin needed; installs Python 3.12, packages & free offline speech recognition; SmartScreen: *More info > Run anyway*) or `SimCoach.bat`.
 * **Supported Sims:** AC, ACC, AC Rally, AC EVO*, LMU, rF2, AMS2 (*Shared Memory = Project CARS 2*), RaceRoom, EA WRC, F1 25 (*UDP 20777, 2025*), DiRT Rally 2.0. Shares port 20777 with SimHub.
