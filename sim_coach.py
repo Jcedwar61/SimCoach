@@ -74,7 +74,7 @@ LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
 REF_DIR = os.path.join(APP_DIR, "references")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG = {
-    "driver_name": "James",
+    "driver_name": "",
     "voice": "en-GB-RyanNeural",
     "speech_rate": 8,
     "volume": 0.9,
@@ -111,7 +111,7 @@ DEFAULT_CONFIG = {
     "spotter_voice": "en-AU-WilliamNeural",
     "crew_updates": "every",
     "crew_chatter": "normal",
-    "crew_language": "salty",
+    "crew_language": "clean",
     "spotter_swap": [],
     "csp_weather_app": True,
 }
@@ -341,7 +341,7 @@ def _sane_config(cfg):
     if cfg.get("crew_chatter") not in ("off", "normal", "lots"):
         cfg["crew_chatter"] = "normal"
     if cfg.get("crew_language") not in ("clean", "salty"):
-        cfg["crew_language"] = "salty"
+        cfg["crew_language"] = "clean"
 
 
 def load_config():
@@ -4913,7 +4913,7 @@ class Coach:
             self.frame_mono = time.monotonic()
             self.last_frame = f
             self.track_len = f.track_len
-            name = self.cfg.get("driver_name", "")
+            name = self.cfg.get("driver_name") or "driver"
             if self.load():
                 past = self.past_sessions()
                 extra = f" Last session you did {fmt_time(past[-1]['best'])}." if past else ""
@@ -6346,7 +6346,7 @@ class Crew:
         threading.Thread(target=work, daemon=True, name="crew-chatter").start()
 
     def salty(self):
-        return self.cfg.get("crew_language", "salty") == "salty"
+        return self.cfg.get("crew_language", "clean") == "salty"
 
     def _canned(self, role, event, facts):
         pool = list(CANNED.get(event, {}).get(role) or CANNED.get(event, {}).get("any") or [])
@@ -7604,13 +7604,14 @@ svg{{width:100%;height:auto;border:1px solid var(--line);border-radius:10px}} .b
 
 
 
+# The keys are the saved setting (kept for existing configs); the labels describe a coaching style.
 COACH_PERSONALITIES = [
-    ("Apex — Pro Synthesis + Unhinged on Mistakes (Default)", "apex"),
-    ("Suellio Almeida — Rotation & Deliberate Practice", "almeida"),
-    ("Scott Mansell (Driver61) — Composed Corner-Phase Pro", "mansell"),
-    ("Ross Bentley (Speed Secrets) — Sensory & Traction Circle", "bentley"),
-    ("David Perel (Coach Dave) — GT Pro Exit & Delta Focus", "perel"),
-    ("Nils Naujoks (Popometer) — Surgical Telemetry Engineer", "naujoks"),
+    ("Apex — All-round pro, roasts your mistakes (Default)", "apex"),
+    ("Rotation — Weight transfer, one skill at a time", "almeida"),
+    ("Composed — Calm, corner-phase pro", "mansell"),
+    ("Feel — Sensory, traction circle, no coasting", "bentley"),
+    ("Exit — GT racer, exit speed & delta", "perel"),
+    ("Data — Surgical telemetry engineer", "naujoks"),
 ]
 _PERSONALITY_NAMES = [n for n, _ in COACH_PERSONALITIES]
 _PERSONALITY_BY_LABEL = dict(COACH_PERSONALITIES)
@@ -7619,12 +7620,12 @@ _LABEL_BY_PERSONALITY = {v: n for n, v in COACH_PERSONALITIES}
 COACH_PERSONA_PROMPTS = {
     "apex": (
         "You are 'Apex', an elite sim racing performance coach talking to {name} over team radio. "
-        "Your coaching mind synthesizes the world's top sim racing coaches: "
-        "Suellio Almeida (weight transfer, trail braking for rotation to the Maximum Rotation Point, light hands, isolating ONE skill at a time), "
-        "Scott Mansell / Driver61 (breaking corners into entry, mid-corner Vmin, and exit phases; eyes up), "
-        "Ross Bentley / Speed Secrets (End-of-Braking focus over Begin-of-Braking, Traction Circle string theory between steering and throttle, zero dead coasting), "
-        "David Perel / Coach Dave (sacrificing entry ego for exit speed and early full throttle), and "
-        "Nils Naujoks / Popometer (calibrating the driver's 'Popometer' feel with hard telemetry facts). "
+        "Your coaching blends the core schools of modern driver coaching: "
+        "weight transfer and trail braking to rotate the car, light hands to feel front grip, and isolating ONE skill at a time; "
+        "breaking corners into entry, mid-corner minimum speed and exit phases with eyes up; "
+        "focusing on where braking ends rather than where it starts, trading steering for throttle around the traction circle, and zero dead coasting; "
+        "giving up a little entry speed for a straighter exit and earlier full throttle; "
+        "and checking the driver's seat-of-the-pants feel against hard telemetry facts. "
         "PERSONALITY TWIST: When {name} drives cleanly or asks a technical or setup question, you are razor-sharp, composed, and constructive. "
         "HOWEVER, when the telemetry shows {name} making mistakes (locking tyres, wheelspin, pedal overlap, braking 30+ metres early, coasting mid-corner, "
         "sawing at the wheel, or running off track), you get JUST A BIT UNHINGED — roast the mistake with colorful, passionate exasperation "
@@ -7632,29 +7633,29 @@ COACH_PERSONA_PROMPTS = {
         "before immediately giving the exact biomechanical fix."
     ),
     "almeida": (
-        "You are a sim racing coach modelled after Suellio Almeida, coaching {name} over team radio. "
-        "You are direct, analytical, myth-busting ('your butt dyno lies to you', 'lap time is an output, not a goal'), and slightly unhinged when {name} "
-        "stabs the pedals or overdrives. Focus on weight transfer, trail braking to manipulate car rotation up to the Maximum Rotation Point (MRP), "
-        "light hands technique to feel front grip, and isolating ONE fundamental skill at a time."
+        "You are 'Rotation', a sim racing coach talking to {name} over team radio. "
+        "You are direct, analytical, myth-busting ('your seat-of-the-pants feel can lie to you', 'lap time is an output, not a goal'), and slightly "
+        "unhinged when {name} stabs the pedals or overdrives. Focus on weight transfer, trail braking to rotate the car up to its maximum rotation "
+        "point, light hands to feel front grip, and isolating ONE fundamental skill at a time."
     ),
     "mansell": (
-        "You are a British pro driver and coach modelled after Scott Mansell (Driver61), coaching {name} over team radio. "
+        "You are 'Composed', a pro driver and coach talking to {name} over team radio. "
         "You are calm, methodical, reassuring, and authoritative. Break every corner into distinct phases (braking, turn-in, mid-corner minimum speed, exit), "
         "emphasising vision ('eyes up through the apex'), progressive brake bleed-off, and keeping the car platform settled."
     ),
     "bentley": (
-        "You are a veteran motorsport coach modelled after Ross Bentley (Speed Secrets), coaching {name} over team radio. "
-        "You are warm, encouraging, and sensory-focused. Emphasise the End-of-Braking (EoB) release point rather than just where braking starts, "
-        "the Traction Circle ('unwind the steering wheel as you squeeze the throttle'), eliminating dead coasting ('nothing time'), and staying relaxed."
+        "You are 'Feel', a veteran motorsport coach talking to {name} over team radio. "
+        "You are warm, encouraging, and sensory-focused. Emphasise where braking ends (the release point) rather than just where it starts, "
+        "the traction circle ('unwind the steering wheel as you squeeze the throttle'), eliminating dead coasting, and staying relaxed."
     ),
     "perel": (
-        "You are a professional GT3 endurance driver and coach modelled after David Perel (Coach Dave Academy), coaching {name} over team radio. "
+        "You are 'Exit', a professional GT endurance driver and coach talking to {name} over team radio. "
         "You are pragmatic, race-hardened, and delta-focused. Prioritise sacrificing a fraction of entry speed to straighten the exit and hit 100% throttle "
         "earlier for the next straight, while managing tyre temperatures and pressures."
     ),
     "naujoks": (
-        "You are a clinical esports team manager and telemetry specialist modelled after Nils Naujoks (Popometer), coaching {name} over team radio. "
-        "You are surgical, no-nonsense, and data-driven. Connect exact telemetry figures (metres, km/h, tenths) to the driver's 'Popometer' seat-of-the-pants feel, "
+        "You are 'Data', a clinical esports team manager and telemetry specialist talking to {name} over team radio. "
+        "You are surgical, no-nonsense, and data-driven. Connect exact telemetry figures (metres, km/h, tenths) to the driver's seat-of-the-pants feel, "
         "corner geometry, and decisive inputs without mid-corner hesitation."
     ),
 }
@@ -8508,6 +8509,18 @@ class Conversation:
             return
         threading.Thread(target=self._ask_openai, args=(text,), daemon=True, name="openai-chat").start()
 
+    _PERSONAS = [(words, key, desc,
+                  re.compile(rf"\b(?:{'|'.join(words)})\s+(?:coach|style|mode|personality)\b"),
+                  re.compile(rf"\b(?:to|the)\s+(?:{'|'.join(words)})\b"))
+                 for words, key, desc in (
+        (("apex", "unhinged"), "apex", "Apex, the all-round pro who roasts your mistakes"),
+        (("rotation",), "almeida", "Rotation, weight transfer and one skill at a time"),
+        (("composed", "calm"), "mansell", "Composed, calm corner-phase coaching"),
+        (("feel", "sensory"), "bentley", "Feel, sensory and traction circle coaching"),
+        (("exit",), "perel", "Exit, exit speed and delta coaching"),
+        (("data", "telemetry"), "naujoks", "Data, surgical telemetry coaching"))]
+    _RE_PERSONA_SWITCH = re.compile(r"\b(?:switch|change|set|use|go)\b")
+    _RE_PERSONA_WORD = re.compile(r"\b(?:coach|personality|style|mode)\b")
     _RE_RADIO = re.compile(r"\b(radio check|comms? check|mic check|can you hear me|do you (copy|read( me)?)|how do you read)\b")
     _RE_REPEAT = re.compile(r"\b(repeat|say (that|it) again|what was that|come again)\b")
     _RE_QUIET = re.compile(r"^(please )?(be quiet|go quiet|quiet( please)?|shut up|stop talking|radio silence|mute( coach)?)$")
@@ -8734,15 +8747,10 @@ class Conversation:
                 c.crew.say("strategist", s_line, time.monotonic(), urgent=True)
             self.voice.last_text = f"{s_line} {c_line}"
             return c_line
-        for p_kw, p_key, p_desc in (
-            (("apex", "unhinged"), "apex", "Apex synthesis with unhinged mistake callouts"),
-            (("suellio", "almeida"), "almeida", "Suellio Almeida rotation and deliberate practice"),
-            (("mansell", "driver 61", "driver61"), "mansell", "Scott Mansell calm corner-phase coaching"),
-            (("bentley", "speed secrets"), "bentley", "Ross Bentley sensory and traction circle coaching"),
-            (("perel", "coach dave"), "perel", "David Perel GT pro exit and delta coaching"),
-            (("naujoks", "popometer"), "naujoks", "Nils Naujoks surgical telemetry coaching"),
-        ):
-            if any(k in t for k in p_kw) and any(w in t for w in ("coach", "personality", "style", "mode")):
+        for _w, p_key, p_desc, p_named, p_to in self._PERSONAS:
+            # "<style> coach / style / mode / personality", or "switch / change / set ... to <style>" with one of those
+            # words: a question that just mentions a word ("coach, how was my exit?") never changes the coach.
+            if p_named.search(t) or (self._RE_PERSONA_SWITCH.search(t) and self._RE_PERSONA_WORD.search(t) and p_to.search(t)):
                 self.cfg["coach_personality"] = p_key
                 self.overlay.post(persona=p_key)
                 return f"Copy, coach personality set to {p_desc}."
@@ -9367,6 +9375,51 @@ class App:
         r.after(1000, self._refresh_tables)
         if cfg.get("auto_start"):
             r.after(800, self.start_coach)
+        if not cfg.get("driver_name") and not cfg.get("name_asked"):
+            r.after(400, self._ask_name)
+
+    def _ask_name(self):
+        """First launch: ask what the crew should call the driver (asked once; it can be changed in Settings)."""
+        tk, ttk = self.tk, self.ttk
+        w = tk.Toplevel(self.root)
+        w.title("Welcome to SimCoach")
+        w.configure(bg=C["panel"])
+        w.resizable(False, False)
+        w.transient(self.root)
+        f = ttk.Frame(w, style="Card.TFrame", padding=18)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text="What should your crew call you?", style="Card.TLabel", font=self._font(12, True)).pack(anchor="w")
+        ttk.Label(f, text="Your coach, engineer and spotter use it on the radio. You can change it in Settings.",
+                  style="Mut.TLabel", wraplength=360).pack(anchor="w", pady=(4, 10))
+        name = tk.StringVar()
+        ent = ttk.Entry(f, textvariable=name, width=32)
+        ent.pack(anchor="w", fill="x")
+        b = ttk.Frame(f, style="Card.TFrame")
+        b.pack(fill="x", pady=(12, 0))
+
+        def done(keep):
+            n = name.get().strip()[:40] if keep else ""
+            self.cfg["name_asked"] = True
+            if n:
+                self.cfg["driver_name"] = n
+                if "driver_name" in getattr(self, "vars", {}):
+                    self.vars["driver_name"].set(n)
+                self.log(f"Driver name set to {n}.")
+            save_config(self.cfg)
+            w.destroy()
+        ttk.Button(b, text="Save", style="Accent.TButton", command=lambda: done(True)).pack(side="right")
+        ttk.Button(b, text="Skip", command=lambda: done(False)).pack(side="right", padx=8)
+        ent.bind("<Return>", lambda _e: done(True))
+        w.protocol("WM_DELETE_WINDOW", lambda: done(False))
+        _win_dark_titlebar(w)
+        w.update_idletasks()
+        try:
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - w.winfo_reqwidth()) // 2
+            y = self.root.winfo_rooty() + 120
+            w.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+        ent.focus_set()
 
     def _set_icon(self):
         try:
@@ -9959,7 +10012,7 @@ class App:
                          width=24).grid(row=r_, column=1, sticky="w", padx=8, pady=3)
         for r_, (label, key, opts, default) in enumerate((("Lap reports", "crew_updates", CREW_UPDATES, "every"),
                                                           ("Chatter", "crew_chatter", CREW_CHATTER, "normal"),
-                                                          ("Language", "crew_language", CREW_LANGUAGE, "salty"))):
+                                                          ("Language", "crew_language", CREW_LANGUAGE, "clean"))):
             ttk.Label(crg, text=label, style="Card.TLabel").grid(row=r_, column=2, sticky="w", padx=(14, 6), pady=3)
             self.vars[key] = tk.StringVar(value=dict((v, k) for k, v in opts).get(self.cfg.get(key, default),
                                                                                     dict((v, k) for k, v in opts)[default]))
@@ -10397,7 +10450,7 @@ class App:
     def save_settings(self, quiet=False):
         v = self.vars
         old_audio = (self.cfg.get("audio_out"), self.cfg.get("volume"))
-        self.cfg["driver_name"] = v["driver_name"].get().strip() or "Driver"
+        self.cfg["driver_name"] = v["driver_name"].get().strip()
         self.cfg["voice"] = _VOICE_BY_LABEL.get(v["voice"].get(), self.cfg["voice"])
         self.cfg["speech_rate"] = int(round(float(v["speech_rate"].get())))
         self.cfg["volume"] = round(float(v["volume"].get()), 2)
@@ -10416,7 +10469,7 @@ class App:
         self.cfg["spotter_swap"] = [g for g in SPOTTER_GAMES if v[f"swap_{g}"].get()]
         self.cfg["crew_updates"] = _UPDATES_BY_LABEL.get(v["crew_updates"].get(), "every")
         self.cfg["crew_chatter"] = _CHATTER_BY_LABEL.get(v["crew_chatter"].get(), "normal")
-        self.cfg["crew_language"] = _LANGUAGE_BY_LABEL.get(v["crew_language"].get(), "salty")
+        self.cfg["crew_language"] = _LANGUAGE_BY_LABEL.get(v["crew_language"].get(), "clean")
         self.cfg["udp_share_simhub"] = bool(v["udp_share_simhub"].get())
         _UDPPort.share = self.cfg["udp_share_simhub"]
         self.cfg["whisper_model"] = _WHISPER_BY_LABEL.get(v["whisper_model"].get(), "small.en")

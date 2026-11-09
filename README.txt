@@ -162,9 +162,9 @@ Tabs & settings
     * Wheel buttons: bind Push-to-talk (hold), Repeat last message, Mute/unmute coach, Braking tones
       on/off, Show/hide overlay, Start/stop a data capture, and Show/hide the setup sheet. Works while the
       game has focus (F8 is the keyboard fallback for push-to-talk).
-    * Coaching: talk level (Quiet / Normal / Chatty), Coach personality (Apex pro synthesis, Suellio
-      Almeida, Scott Mansell, Ross Bentley, David Perel, or Nils Naujoks), braking tones, split deltas,
-      auto-start, F1 UDP port, and SimHub port sharing.
+    * Coaching: talk level (Quiet / Normal / Chatty), Coach personality (Apex all-round pro, Rotation,
+      Composed, Feel, Exit, or Data; say e.g. "data coach" or "switch to composed style" on the radio),
+      braking tones, split deltas, auto-start, F1 UDP port, and SimHub port sharing.
     * Conversation (AI): pick the AI provider (OpenAI, Google Gemini or DeepSeek), paste its API key and
       click "Test key". Keys are stored locally in %APPDATA%\SimCoach\config.json (or set the
       OPENAI_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY environment variable). With "try my other keys"
