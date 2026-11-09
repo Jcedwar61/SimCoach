@@ -5081,8 +5081,10 @@ class Coach:
             if rs["phase"] != "idle":
                 self._rs = self._new_start_state()
             return
-        if f.restart:
+        restart_edge = bool(f.restart) and not rs.get("restart_seen")
+        if restart_edge:
             rs = self._rs = self._new_start_state()
+        rs["restart_seen"] = bool(f.restart)
         ph = rs["phase"]
         if ph == "done":
             return
@@ -5124,7 +5126,7 @@ class Coach:
         if dt > 90:
             rs["phase"] = "done"
             return
-        if not reached:
+        if not reached or dt < 5.0:        # never review before the launch has properly happened
             return
         rs["phase"] = "done"
         if rs["bog"]:
@@ -9832,22 +9834,23 @@ def lan_ip():
 class SecondScreen:
     """Serves SECOND_SCREEN_HTML and a JSON snapshot. Read-only: nothing on the page can change SimCoach."""
 
-    def __init__(self, snapshot, log=print):
+    def __init__(self, snapshot, log=print, token=""):
         self.snapshot, self.log = snapshot, log
         self.httpd, self.port = None, None
+        self.token = token or "live"     # secret part of the address: only people you give the link to can open it
 
     def running(self):
         return self.httpd is not None
 
     def url(self):
-        return f"http://{lan_ip()}:{self.port}/" if self.port else ""
+        return f"http://{lan_ip()}:{self.port}/{self.token}/" if self.port else ""
 
     def start(self, port, host="0.0.0.0"):
         if self.httpd is not None and self.port == port:
             return True
         self.stop()
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-        snap, page = self.snapshot, SECOND_SCREEN_HTML.encode("utf-8")
+        snap, page, base = self.snapshot, SECOND_SCREEN_HTML.encode("utf-8"), f"/{self.token}/"
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
@@ -9855,9 +9858,9 @@ class SecondScreen:
 
             def do_GET(self):
                 path = self.path.split("?", 1)[0]
-                if path in ("/", "/index.html"):
+                if path in (base, base + "index.html"):
                     body, ctype = page, "text/html; charset=utf-8"
-                elif path == "/data.json":
+                elif path == base + "data.json":
                     try:
                         body = json.dumps(snap(), separators=(",", ":")).encode("utf-8")
                     except Exception as e:
@@ -9951,7 +9954,11 @@ class App:
         r.after(1000, self._refresh_tables)
         if cfg.get("auto_start"):
             r.after(800, self.start_coach)
-        self.screen = SecondScreen(self._screen_data, self.log)
+        if not self.cfg.get("second_screen_token"):
+            import secrets
+            self.cfg["second_screen_token"] = secrets.token_urlsafe(9)
+            save_config(self.cfg)
+        self.screen = SecondScreen(self._screen_data, self.log, self.cfg["second_screen_token"])
         r.after(300, self._apply_second_screen)
         if not cfg.get("driver_name") and not cfg.get("name_asked"):
             r.after(400, self._ask_name)
@@ -10826,8 +10833,11 @@ class App:
 
     def _screen_data(self):
         """What the phone page shows (read without the coach lock: display values only)."""
-        c, live = self.coach, getattr(self, "_live", {})
-        f = c.last_frame if c.live() else None
+        c, live = self.coach, dict(getattr(self, "_live", {}))
+        with c.lock:                     # a consistent copy: the telemetry thread updates these
+            f = c.last_frame if c.live() else None
+            best_t = c.best_time
+            fpl = c.crew.fuel_per_lap() if (f is not None and c.crew) else None
 
         def text(x):  # spoken spellings back to written ones
             if not x:
@@ -10841,10 +10851,9 @@ class App:
              "delta_color": live.get("delta_color"), "focus": text(live.get("focus")), "coach": text(live.get("tip"))}
         if f is None:
             return d
-        fpl = c.crew.fuel_per_lap() if c.crew else None
         d.update(sim=f.game, track=nice_name(f.track), car=nice_name(f.car), lap=f.laps_done + 1,
                  last=lap(f.last_time) if f.last_time > 10 else None,
-                 best=lap(c.best_time) if c.best_time else None, pos=f.position or None, cars=f.cars or None,
+                 best=lap(best_t) if best_t else None, pos=f.position or None, cars=f.cars or None,
                  gap_ahead=f.gap_ahead, gap_behind=f.gap_behind, speed=int(round(f.speed)), gear=f.gear,
                  fuel=(f"{f.fuel:.1f} {'kg' if f.game in KG_FUEL_GAMES else 'L'}" if f.fuel > 0 else None),
                  fuel_laps=(int(f.fuel / fpl) if (fpl and f.fuel > 0) else None))
