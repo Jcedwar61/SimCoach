@@ -7818,13 +7818,14 @@ def openai_chat(key, model, messages, max_tokens=300, timeout=20.0, provider="op
     def request(budget):
         while True:
             try:
-                return client.chat.completions.create(**kw, **extra, **{param[0]: budget})
+                # Provider-specific options go in the JSON body, so an older openai package never rejects them.
+                return client.chat.completions.create(**kw, **{param[0]: budget}, **({"extra_body": extra} if extra else {}))
             except openai.BadRequestError as e:
                 if param[0] == "max_completion_tokens" and _mct_unsupported(e):
                     param[0] = "max_tokens"
                     continue
                 # An optional tuning parameter this model doesn't take: drop it and ask again.
-                bad = next((k for k in extra if k in str(e)), None)
+                bad = next((k for k in extra if re.search(rf"\b{re.escape(k)}\b", str(e))), None)
                 if bad is None:
                     raise
                 extra.pop(bad)
@@ -7861,22 +7862,23 @@ def _ai_transient(e):
 
 def ai_chat_ex(cfg, messages, max_tokens=300, timeout=20.0):
     """(reply, 'Provider model') from the chosen provider. With 'ai_fallback' on, a network, rate-limit or
-    server failure moves on to the other providers that have a key, so the radio keeps working."""
+    server failure moves on to the other providers that have a key, so the radio keeps working. A failure
+    carries .ai_provider (the provider that failed last) so the spoken explanation names the right one."""
     primary = ai_provider(cfg)
     order = [primary]
     if cfg.get("ai_fallback", True):
         order += [p for p in AI_PROVIDERS if p != primary and ai_key(cfg, p)]
-    first_err = None
-    for p in order:
+    for i, p in enumerate(order):
         try:
             return openai_chat(ai_key(cfg, p), ai_model(cfg, p), messages, max_tokens=max_tokens,
                                timeout=timeout, provider=p), ai_label(cfg, p)
         except Exception as e:
-            if first_err is None:
-                first_err = e
-            if not _ai_transient(e):
-                break
-    raise first_err
+            try:
+                e.ai_provider = p
+            except Exception:
+                pass
+            if i == len(order) - 1 or not _ai_transient(e):
+                raise
 
 
 def ai_chat(cfg, messages, max_tokens=300, timeout=20.0):
@@ -7887,6 +7889,7 @@ def openai_problem(e, provider="openai"):
     """A short spoken explanation of an AI failure (the key test strips ' Check it in Settings.')."""
     if isinstance(e, OpenAIReplyError):
         return str(e)
+    provider = getattr(e, "ai_provider", None) or provider
     name = (AI_PROVIDERS.get(provider) or AI_PROVIDERS["openai"])["name"]
     msg = str(e).lower()
     if isinstance(e, ValueError) and "api key" in msg:
@@ -8770,7 +8773,8 @@ class Conversation:
             self.overlay.post(rc_t=now(), rc_reply=reply, rc_ai=f"{who} · {now() - t0:.1f} s")
         except Exception as e:
             reply = openai_problem(e, prov)
-            self.log(f"{name} error: {type(e).__name__}: {e}")
+            failed = AI_PROVIDERS.get(getattr(e, "ai_provider", prov), AI_PROVIDERS[prov])["name"]
+            self.log(f"{failed} error: {type(e).__name__}: {e}")
             self.overlay.post(rc_t=now(), rc_reply=reply, rc_ai_fail=reply)
         self.voice.say(reply, now(), "answer")
         self.overlay.post(tip=reply)
@@ -9871,6 +9875,7 @@ class App:
         def on_provider(_e=None):
             pid = _AI_BY_LABEL.get(self.vars["ai_provider"].get(), "openai")
             self.model_combo.configure(textvariable=self.vars[f"{pid}_model"], values=AI_PROVIDERS[pid]["models"])
+            self.model_combo.set(self.vars[f"{pid}_model"].get())
             if hasattr(self, "key_lbl"):
                 self.key_lbl.configure(text="")
         prov_combo.bind("<<ComboboxSelected>>", on_provider)
