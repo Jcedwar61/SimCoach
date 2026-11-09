@@ -114,6 +114,8 @@ DEFAULT_CONFIG = {
     "crew_language": "clean",
     "spotter_swap": [],
     "csp_weather_app": True,
+    "second_screen": False,
+    "second_screen_port": 8765,
 }
 RALLY_GAMES = {"EA WRC", "DiRT Rally 2.0", "AC Rally"}
 NO_REFUEL_GAMES = {"F1 25"}
@@ -342,6 +344,8 @@ def _sane_config(cfg):
         cfg["crew_chatter"] = "normal"
     if cfg.get("crew_language") not in ("clean", "salty"):
         cfg["crew_language"] = "clean"
+    sp = cfg.get("second_screen_port")
+    cfg["second_screen_port"] = int(sp) if _sane_num(sp) and 1024 <= int(sp) <= 65535 else 8765
 
 
 def load_config():
@@ -2004,6 +2008,171 @@ class R3EReader(Reader):
 
 
 
+IRSDK_MMF = "Local\\IRSDKMemMapFileName"
+_IR_HDR = struct.Struct("<10i")            # ver, status, tickRate, sessionInfoUpdate, sessionInfoLen, sessionInfoOffset,
+                                            # numVars, varHeaderOffset, numBuf, bufLen
+_IR_VARBUF = struct.Struct("<2i")          # tickCount, bufOffset (then 2 pad ints); 4 of them from offset 48
+_IR_VARHDR = struct.Struct("<3i?3x32s")    # type, offset, count, countAsTime, name (desc/unit follow; 144 bytes each)
+_IR_FMT = {0: "c", 1: "?", 2: "i", 3: "I", 4: "f", 5: "d"}
+_IR_SIZE = {0: 1, 1: 1, 2: 4, 3: 4, 4: 4, 5: 8}
+# irsdk_Flags
+_IR_FLAG_YELLOW, _IR_FLAG_BLUE, _IR_FLAG_YELLOW_WAVING = 0x8, 0x20, 0x100
+_IR_FLAG_CAUTION, _IR_FLAG_CAUTION_WAVING = 0x4000, 0x8000
+
+
+def _ir_session_info(text):
+    """The few fields SimCoach needs from iRacing's session YAML, without a YAML library."""
+    def field(name, src=text):
+        m = re.search(rf"^\s*{name}:\s*(.*?)\s*$", src, re.MULTILINE)
+        return m.group(1).strip().strip('"') if m else None
+
+    def num(v):
+        m = re.match(r"-?\d+(?:\.\d+)?", v or "")
+        return float(m.group(0)) if m else None
+    info = {"track": field("TrackDisplayName") or field("TrackName") or "iRacing track"}
+    km = num(field("TrackLength"))
+    info["track_len"] = km * 1000.0 if km else None
+    info["redline"] = num(field("DriverCarRedLine")) or 0.0
+    info["fuel_cap"] = num(field("DriverCarFuelMaxLtr")) or 0.0
+    me = num(field("DriverCarIdx"))
+    info["car_idx"] = int(me) if me is not None else None
+    info["car"], cars, drivers = "iRacing car", 0, {}
+    for blk in re.split(r"^\s*-\s+CarIdx:\s*", text, flags=re.MULTILINE)[1:]:
+        idx = num(blk.split("\n", 1)[0])
+        body = blk.split("\n- ", 1)[0]
+        if idx is None:
+            continue
+        name = field("UserName", body) or ""
+        drivers[int(idx)] = {"name": name, "car": field("CarScreenName", body) or ""}
+        if field("CarIsPaceCar", body) == "1" or field("IsSpectator", body) == "1":
+            continue
+        cars += 1
+        if info["car_idx"] is not None and int(idx) == info["car_idx"]:
+            info["car"] = field("CarScreenName", body) or info["car"]
+    info["cars"], info["drivers"] = cars, drivers
+    sessions = {}
+    for blk in re.split(r"^\s*-\s+SessionNum:\s*", text, flags=re.MULTILINE)[1:]:
+        n = num(blk.split("\n", 1)[0])
+        if n is None:
+            continue
+        typ = (field("SessionType", blk) or "").lower()
+        laps = num(field("SessionLaps", blk))
+        sessions[int(n)] = {"type": "race" if "race" in typ else ("qualifying" if "qual" in typ else "practice"),
+                            "laps": int(laps) if laps else 0}
+    info["sessions"] = sessions
+    return info
+
+
+class IRacingReader(Reader):
+    """iRacing through its SDK shared memory: a header, variable descriptions, rotating data buffers (the newest
+    one is read) and a YAML text block with track, car and session details."""
+    name = "iRacing"
+    CAP_BLOCKS = (("irsdk", "m", None),)
+    WANT = ("Speed", "Throttle", "Brake", "SteeringWheelAngle", "SteeringWheelAngleMax", "Gear", "RPM",
+            "LapDistPct", "LapCompleted", "LapCurrentLapTime", "LapLastLapTime", "OnPitRoad", "PlayerTrackSurface",
+            "FuelLevel", "PlayerCarPosition", "PlayerCarIdx", "SessionNum", "SessionState", "SessionFlags",
+            "SessionTimeRemain", "WaterTemp", "OilTemp", "CarIdxPosition", "CarIdxF2Time", "IsOnTrack")
+
+    def __init__(self):
+        self.m = None
+        self._vars, self._layout_key = {}, None
+        self._info, self._info_upd = None, None
+
+    def close(self):
+        if self.m:
+            self.m.close()
+            self.m = None
+        self._vars, self._layout_key, self._info, self._info_upd = {}, None, None, None
+
+    def connected(self):
+        if not running("iracingsim"):
+            self.close()
+            return False
+        if self.m is None:
+            self.m = SharedMem.open(IRSDK_MMF)
+        if self.m is None:
+            return False
+        return bool(_IR_HDR.unpack_from(self.m[0:40], 0)[1] & 1)
+
+    def _load_vars(self, hdr):
+        n_vars, vh_off = hdr[6], hdr[7]
+        if (n_vars, vh_off) == self._layout_key:
+            return
+        raw = self.m[vh_off:vh_off + n_vars * 144]
+        out = {}
+        for k in range(n_vars):
+            typ, off, cnt, _ast, name = _IR_VARHDR.unpack_from(raw, k * 144)
+            name = name.split(b"\0", 1)[0].decode("latin-1")
+            if name in self.WANT and typ in _IR_FMT:
+                out[name] = (typ, off, max(1, cnt))
+        self._vars, self._layout_key = out, (n_vars, vh_off)
+
+    def _get(self, buf, name, default=None):
+        v = self._vars.get(name)
+        if v is None:
+            return default
+        typ, off, cnt = v
+        if cnt == 1:
+            return struct.unpack_from("<" + _IR_FMT[typ], buf, off)[0]
+        return struct.unpack_from(f"<{cnt}{_IR_FMT[typ]}", buf, off)
+
+    def read(self):
+        hdr = _IR_HDR.unpack_from(self.m[0:40], 0)
+        if not hdr[1] & 1 or hdr[8] < 1 or hdr[9] <= 0:
+            return None
+        self._load_vars(hdr)
+        if hdr[3] != self._info_upd or self._info is None:
+            raw = self.m[hdr[5]:hdr[5] + hdr[4]].split(b"\0", 1)[0]
+            self._info, self._info_upd = _ir_session_info(raw.decode("latin-1", "replace")), hdr[3]
+        bufs = [_IR_VARBUF.unpack_from(self.m[48 + 16 * k:48 + 16 * k + 8], 0) for k in range(min(4, hdr[8]))]
+        tick, off = max(bufs)
+        slot = 48 + 16 * bufs.index((tick, off))
+        buf = self.m[off:off + hdr[9]]
+        if _IR_VARBUF.unpack_from(self.m[slot:slot + 8], 0)[0] != tick:
+            return None                                   # iRacing rewrote that buffer while we copied it: next frame
+        g = lambda n, d=None: self._get(buf, n, d)
+        info = self._info
+        ses = info["sessions"].get(g("SessionNum", 0) or 0, {"type": "practice", "laps": 0})
+        smax = g("SteeringWheelAngleMax", 0.0) or 0.0
+        surf = g("PlayerTrackSurface", 3)
+        laps_done = max(0, g("LapCompleted", 0) or 0)
+        fr = Frame("iRacing", info["track"], info["car"], laps_done, max(0.0, min(0.99999, g("LapDistPct", 0.0) or 0.0)),
+                   (g("Speed", 0.0) or 0.0) * 3.6, g("Throttle", 0.0) or 0.0, g("Brake", 0.0) or 0.0,
+                   (-(g("SteeringWheelAngle", 0.0) or 0.0) / smax) if smax > 0.1 else 0.0,
+                   g("Gear", 0) or 0, g("RPM", 0.0) or 0.0, max(0.0, g("LapCurrentLapTime", 0.0) or 0.0),
+                   max(0.0, g("LapLastLapTime", 0.0) or 0.0), bool(g("OnPitRoad", False)) or surf in (1, 2), surf == 0,
+                   fuel=max(0.0, g("FuelLevel", 0.0) or 0.0), track_len=info["track_len"], max_rpm=info["redline"],
+                   session=ses["type"], position=max(0, g("PlayerCarPosition", 0) or 0), cars=info["cars"],
+                   race_laps=ses["laps"] if ses["type"] == "race" else 0, fuel_cap=info["fuel_cap"])
+        tleft = g("SessionTimeRemain")
+        fr.time_left = tleft if (tleft is not None and 0 < tleft < 86400 and not fr.race_laps) else None
+        fr.race_over = bool(ses["type"] == "race" and (g("SessionState", 0) or 0) >= 5)
+        water, oil = g("WaterTemp"), g("OilTemp")
+        fr.water_temp = water if water and 1.0 < water < 250.0 else None
+        fr.oil_temp = oil if oil and 1.0 < oil < 250.0 else None
+        fl = g("SessionFlags", 0) or 0
+        fr.flag = ("fcy" if fl & (_IR_FLAG_CAUTION | _IR_FLAG_CAUTION_WAVING) else
+                   "yellow" if fl & (_IR_FLAG_YELLOW | _IR_FLAG_YELLOW_WAVING) else
+                   "blue" if fl & _IR_FLAG_BLUE else None)
+        me, pos, f2 = g("PlayerCarIdx"), g("CarIdxPosition"), g("CarIdxF2Time")
+        if me is not None and pos and f2 and 0 <= me < len(pos) and fr.position > 0 and ses["type"] == "race":
+            by_pos = {p: i for i, p in enumerate(pos) if p > 0}
+            mine = f2[me]
+            a, b = by_pos.get(fr.position - 1), by_pos.get(fr.position + 1)
+            ga = mine - f2[a] if a is not None else None
+            gb = f2[b] - mine if b is not None else None
+            fr.gap_ahead = ga if ga is not None and 0 < ga < 600 else None
+            fr.gap_behind = gb if gb is not None and 0 < gb < 600 else None
+            names = info["drivers"]
+            if a is not None and fr.gap_ahead:
+                fr.car_ahead = {"name": names.get(a, {}).get("name", ""), "position": fr.position - 1,
+                                "car": names.get(a, {}).get("car", ""), "gap_s": fr.gap_ahead}
+            if b is not None and fr.gap_behind:
+                fr.car_behind = {"name": names.get(b, {}).get("name", ""), "position": fr.position + 1,
+                                 "car": names.get(b, {}).get("car", ""), "gap_s": fr.gap_behind}
+        return fr
+
+
 def _udp_owner(port):
     """(local ip, process name) of another program's UDP socket on `port`, or None."""
     try:
@@ -2635,7 +2804,7 @@ def available_readers(cfg=None, log=print):
     _UDPPort.log = staticmethod(log)
     f1 = int(cfg.get("f1_port", 20777))
     dr2_fb = int(cfg.get("dr2_port", 20779))
-    makers = [ACReader, ACEvoReader, LMUReader, RF2Reader, AMS2Reader, R3EReader,
+    makers = [ACReader, ACEvoReader, LMUReader, RF2Reader, AMS2Reader, R3EReader, IRacingReader,
               lambda: EAWRCReader(), lambda: F1Reader(f1, 20778 if f1 != 20778 else None),
               lambda: DR2Reader(20777, dr2_fb if dr2_fb != 20777 else None)]
     for mk in makers:
@@ -2750,7 +2919,8 @@ class Voice:
                 and not self.hold.is_set() and self.q.empty() and self.spot_q.empty())
 
     def say(self, text, now, kind="info", voice=None, who="COACH"):
-        """kind: 'cue', 'info', 'answer', 'urgent', or 'spot' (spotter: jumps the queue and cuts in)."""
+        """kind: 'cue', 'info', 'chat' (crew banter: cut short by any urgent call), 'answer', 'urgent', or 'spot'
+        (spotter: jumps the queue and cuts in)."""
         self.log(f"{who}: {text}")
         if kind == "spot":
             self.spot_q.put((text, kind, time.monotonic(), voice))
@@ -3158,8 +3328,8 @@ class Voice:
                     if self._item and self._item[1] == "cue":
                         self._drop_cue(text, vname)
                     return
-                if self.hold.is_set() or (self.preempt.is_set() or not self.spot_q.empty() if not spot else not self.spot_q.empty()):
-                    return None if spot else Voice.SPOT_FIRST
+                if self._must_stop(spot):
+                    return None if (spot or self._is_chat()) else Voice.SPOT_FIRST
                 with self._mlock:
                     pygame.mixer.music.load(path)
                     pygame.mixer.music.set_volume(float(self.cfg.get("volume", 0.9)))
@@ -3167,7 +3337,7 @@ class Voice:
                 self._started(label)
                 cut = False
                 while pygame.mixer.music.get_busy():
-                    if self.hold.is_set() or (self.preempt.is_set() or not self.spot_q.empty() if not spot else not self.spot_q.empty()):
+                    if self._must_stop(spot):
                         pygame.mixer.music.stop()
                         cut = True
                         break
@@ -3185,14 +3355,14 @@ class Voice:
                 if self._item and self._item[1] == "cue":
                     self._drop_cue(text, vname)
                 return
-            if self.hold.is_set() or (self.preempt.is_set() or not self.spot_q.empty() if not spot else not self.spot_q.empty()):
-                return None if spot else Voice.SPOT_FIRST
+            if self._must_stop(spot):
+                return None if (spot or self._is_chat()) else Voice.SPOT_FIRST
             try:
                 self._started("Windows voice (neural voice unreachable)")
                 spot = bool(self._item and self._item[1] == "spot")
                 self._sapi.Speak(text, 1)
                 while not self._sapi.WaitUntilDone(50):
-                    if self.hold.is_set() or (self.preempt.is_set() or not self.spot_q.empty() if not spot else not self.spot_q.empty()):
+                    if self._must_stop(spot):
                         self._sapi.Speak("", 3)
                         self._last_spoke_end = time.monotonic()
                         if self._item and self._item[1] == "urgent":
@@ -3203,6 +3373,23 @@ class Voice:
             except Exception:
                 pass
         self._started(None)
+
+    def _is_chat(self):
+        return bool(self._item and self._item[1] == "chat")
+
+    def _must_stop(self, spot):
+        """Stop (or don't start) the current line: push-to-talk is held, a spotter call is waiting, or this is crew
+        banter and an urgent call (box, flags, damage...) is queued behind it: banter never holds those up."""
+        if self.hold.is_set():
+            return True
+        if spot:
+            return not self.spot_q.empty()
+        if self.preempt.is_set() or not self.spot_q.empty():
+            return True
+        if self._is_chat():
+            with self.q.mutex:
+                return any(it[1] == "urgent" for it in self.q.queue)
+        return False
 
     def _stale(self):
         """Too late to say: a corner cue more than a second old (the corner has gone), or a spotter call more
@@ -4395,6 +4582,10 @@ class Coach:
         self.reset_session()
 
     def reset_session(self):
+        self._rs = self._new_start_state()
+        self.last_start = None
+        self.drill = None
+        self.drills_done = []
         self.ref = None
         self.best_time = None
         self.corners = []
@@ -4597,8 +4788,84 @@ class Coach:
                 cues.append((ci, c_start, txt, Voice.duration(txt) + 0.6))
         self._focus_cues = tuple(cues)
         self._state_rev += 1
+        d = getattr(self, "drill", None)
+        if d and focus and focus[0][0] == d["ci"]:
+            self.overlay.post(focus=f"Drill  ·  {self.turn(d['ci'])}  ·  lap {d['done'] + 1} of {d['laps']}  ·  {focus[0][1]}")
+            return
         self.overlay.post(focus="Focus  ·  " + "   ·   ".join(f"{self.turn(ci)}: {t}" for ci, t in focus)
                           if focus else "Focus  ·  consistency")
+
+    # --- practice drills: one corner, a set number of laps, before/after comparison ---------------------------
+    def _corner_losses(self, ci, ref_seg, n=3):
+        """This corner's time lost against `ref_seg` on the last n clean laps (newest last)."""
+        out = []
+        for h in self.history:
+            m = (h.get("corners") or {}).get(ci)
+            if h.get("pit") or h.get("invalid") or not m or not ok(m.get("seg")):
+                continue
+            out.append(m["seg"] - ref_seg)
+        return out[-n:]
+
+    def start_drill(self, ci, laps=5):
+        """Start a drill on corner index ci. Returns what to say."""
+        with self.lock:
+            f = self.last_frame
+            if (f is not None and f.session == "race") or self.session == "race":
+                return "Drills are for practice. Let's do one after the race."
+            if not self.corners or not self.best_corner:
+                return "Give me a clean lap first so I can map the corners, then ask again."
+            if not 0 <= ci < len(self.corners):
+                return f"I've only mapped {len(self.corners)} corners here. Pick turn 1 to {len(self.corners)}."
+            laps = max(1, min(20, int(laps)))
+            best = self.best_corner.get(ci) or {}
+            ref = best.get("seg")
+            if not ok(ref):
+                return f"I haven't got clean data through {self.turn(ci)} yet. Do another lap first."
+            base = self._corner_losses(ci, ref)
+            last = next(((h.get("corners") or {}).get(ci) for h in reversed(self.history)
+                         if (h.get("corners") or {}).get(ci) and not h.get("pit")), None)
+            tip = (self.diagnose(last, best, cue=True) if last else None) or \
+                "One thing at a time: hit your marker and carry speed to the apex."
+            self.drill = {"ci": ci, "laps": laps, "done": 0, "ref_seg": ref, "tip": tip, "results": [],
+                          "base": (sum(base) / len(base)) if base else None}
+            self._set_focus([(ci, tip)])
+            self._state_rev += 1
+            return f"Drill on. {self.turn(ci)} for the next {_say_laps(laps)}, I'll only talk about that corner. {tip}"
+
+    def stop_drill(self):
+        with self.lock:
+            if not self.drill:
+                return "There's no drill running."
+            msg = self._end_drill()
+            self._set_focus(self.focus)
+            return msg
+
+    def _end_drill(self):
+        """Close the drill, record it for the report and return the spoken wrap-up."""
+        d, self.drill = self.drill, None
+        turn, res = self.turn(d["ci"]), d["results"]
+        if not res:
+            return f"Drill on {turn} stopped before a clean lap through it."
+        avg, best = sum(res) / len(res), min(res)
+        self.drills_done.append({"turn": d["ci"] + 1, "laps": len(res), "planned": d["laps"], "before": d["base"],
+                                 "avg": avg, "best": best})
+        self._state_rev += 1
+        out = [f"Drill done, {turn}, {_say_laps(len(res))}."]
+        if d["base"] is not None:
+            diff = d["base"] - avg
+            if diff > 0.03:
+                out.append(f"You averaged {tenths(diff)} better through there than before the drill.")
+            elif diff < -0.03:
+                out.append(f"You averaged {tenths(-diff)} slower there than before, so keep working on it.")
+            else:
+                out.append("About the same average as before the drill.")
+        if best < -0.02:
+            out.append(f"Best effort beat your old best through there by {tenths(best)}.")
+        elif best < 0.03:
+            out.append("Best effort matched your best through there.")
+        else:
+            out.append(f"Best effort was {tenths(best)} off your best there.")
+        return " ".join(out)
 
     def adopt_reference(self):
         """A new saved reference for the current sim/track/car (an import): load it and rebuild everything that is
@@ -4799,6 +5066,88 @@ class Coach:
             return True
         return False
 
+    # --- race starts: a reminder on the grid, then a launch + turn one review --------------------------------
+    @staticmethod
+    def _new_start_state():
+        return {"phase": "idle", "still_t": None, "grid_pos": None, "t0": None, "last_t": None, "thr_min": 1.0,
+                "spin": 0.0, "t100": None, "bog": False}
+
+    def _race_start(self, f, now):
+        """Standing starts only (a rolling start never sits still on the grid, so it's never armed)."""
+        rs = getattr(self, "_rs", None)
+        if rs is None:
+            rs = self._rs = self._new_start_state()
+        if f.session != "race" or f.game in RALLY_GAMES:
+            if rs["phase"] != "idle":
+                self._rs = self._new_start_state()
+            return
+        restart_edge = bool(f.restart) and not rs.get("restart_seen")
+        if restart_edge:
+            rs = self._rs = self._new_start_state()
+        rs["restart_seen"] = bool(f.restart)
+        ph = rs["phase"]
+        if ph == "done":
+            return
+        if ph in ("idle", "grid"):
+            if f.laps_done > 0:
+                rs["phase"] = "done"
+                return
+            if f.speed < 3 and not f.in_pit:
+                if rs["still_t"] is None:
+                    rs["still_t"] = now
+                if ph == "idle" and now - rs["still_t"] >= 2.0:
+                    rs["phase"] = "grid"
+                if rs["phase"] == "grid":
+                    rs["grid_pos"] = f.position or rs["grid_pos"]
+                    if not rs.get("told") and self.say(
+                            "On the grid. Revs up, eyes on the lights, then smooth on the throttle as it hooks up. "
+                            "Be sensible into turn one.", now):
+                        rs["told"] = True
+            elif ph == "grid" and f.speed >= 3:
+                rs.update(phase="launch", t0=now, last_t=now)
+            else:
+                rs["still_t"] = None
+            return
+        # launch: measure the getaway until the end of turn one
+        dt, step = now - rs["t0"], max(0.0, now - rs["last_t"])
+        rs["last_t"] = now
+        if 0.3 <= dt <= 1.5:
+            rs["thr_min"] = min(rs["thr_min"], f.throttle)
+        if dt <= 4.0 and f.wheel_kmh and f.speed > 5 and max(f.wheel_kmh) > f.speed * 1.15 + 3:
+            rs["spin"] += step
+        if rs["t100"] is None and f.speed >= 100 and dt <= 15:
+            rs["t100"] = dt
+        if 3.0 <= dt <= 3.5 and f.speed < 30:
+            rs["bog"] = True
+        if self.corners:
+            reached = f.pct < 0.9 and f.pct * BINS >= _corner_window(self.corners[0])[1]
+        else:
+            reached = dt >= 25 or 0.25 < f.pct < 0.9
+        if dt > 90:
+            rs["phase"] = "done"
+            return
+        if not reached or dt < 5.0:        # never review before the launch has properly happened
+            return
+        rs["phase"] = "done"
+        if rs["bog"]:
+            launch = "You bogged down off the line, more revs when the lights go."
+        elif rs["spin"] > 0.4:
+            launch = "Too much wheelspin off the line, feed the throttle in over the first second."
+        elif rs["thr_min"] < 0.7:
+            launch = "You came off the throttle in the launch, commit once it hooks up."
+        else:
+            launch = "Clean launch."
+        bits = [launch]
+        if rs["t100"]:
+            bits.append(f"Zero to a hundred in {rs['t100']:.1f} seconds.")
+        g, p = rs["grid_pos"], f.position
+        if g and p:
+            d = g - p
+            bits.append(f"P{p} after turn one, " + (f"up {d}." if d > 0 else f"down {-d}." if d < 0 else "held your place."))
+        self.last_start = {"grid": g, "after_t1": p, "launch": launch, "zero_to_100_s": rs["t100"],
+                           "wheelspin_s": round(rs["spin"], 2)}
+        self.say("Start review. " + " ".join(bits), now, force=True)
+
     def theoretical_best(self):
         """Your best lap with every corner replaced by your best-ever run through that corner."""
         if not self.ref or self.best_time is None:
@@ -4852,6 +5201,7 @@ class Coach:
             self._update(f, now)
 
     def _start_new_session(self, f):
+        self._rs = self._new_start_state()
         self.end_session()
         self.history = []
         self.issue_counts.clear()
@@ -4895,6 +5245,10 @@ class Coach:
                 self.crew.key = None
         self.frame_mono = time.monotonic()
         self.last_frame = f
+        try:
+            self._race_start(f, now)
+        except Exception as e:
+            file_log(f"Race start coaching: {type(e).__name__}: {e}")
         if self._sheet_wait is not None:
             sh = self.last_setup_sheet
             racing = (f.session == "race" or f.game in RALLY_GAMES) and (f.laps_done >= 1 or (f.speed > 50 and not f.in_pit))
@@ -5185,6 +5539,8 @@ class Coach:
             if ci in spoken:
                 continue
             spoken.add(ci)
+            if self.drill and ci != self.drill["ci"]:
+                continue
             if self.lap.pit or ci not in self.best_corner or self.lap.has_off_in(w0, w1) or not self.lap.observed(w0, w1):
                 continue
             filled = self.lap.filled_window(w0, w1)
@@ -5797,6 +6153,23 @@ class Coach:
                 tip = self.diagnose(per[ci], self.best_corner[ci], cue=True)
                 if tip:
                     self.focus.append((ci, tip))
+        drill_msg = None
+        if self.drill:
+            d = self.drill
+            dm = per.get(d["ci"])
+            if dm and ok(dm.get("seg")):
+                loss = dm["seg"] - d["ref_seg"]
+                d["results"].append(loss)
+                d["done"] += 1
+                d["tip"] = self.diagnose(dm, self.best_corner.get(d["ci"], dm), cue=True) or d["tip"]
+                if d["done"] >= d["laps"]:
+                    drill_msg = self._end_drill()
+                else:
+                    how = (f"{tenths(loss)} quicker than your best" if loss < -0.02 else
+                           "right on your best" if loss < 0.03 else f"{tenths(loss)} off your best")
+                    drill_msg = f"Drill lap {d['done']} of {d['laps']}, {self.turn(d['ci'])}: {how}. {d['tip']}"
+            if self.drill:
+                self.focus = [(self.drill["ci"], self.drill["tip"])]
         if changed or pb:
             self.save()
 
@@ -5813,13 +6186,15 @@ class Coach:
             parts.append(f"{tenths(delta)} off your best — what on earth was that lap?! Breathe, reset your eyes, and stop overdriving.")
         else:
             parts.append(f"{tenths(delta)} off your best.")
-        if improved and (pb or delta <= 0.6):
+        if improved and (pb or delta <= 0.6) and not drill_msg:
             parts.append(f"Gained most in {self.turn(max(improved)[1])}.")
         if will_finish_race:
             self.say(" ".join(parts), now, force=True)
             self._set_focus(self.focus)
             return
-        if self.focus:
+        if drill_msg:
+            parts.append(drill_msg)
+        elif self.focus:
             ci, tip = self.focus[0]
             parts.append(f"Next lap, isolate {self.turn(ci)}: {tip}")
         elif not pb:
@@ -6071,6 +6446,10 @@ class Coach:
                 "best_lap_s": round(clean_b, 3) if clean_b else None, "recent_laps_s": laps,
                 "theoretical_best_s": round(tb, 3) if tb else None,
                 "focus": [{"turn": ci + 1, "tip": t} for ci, t in self.focus],
+                "drill": ({"turn": self.drill["ci"] + 1, "lap": self.drill["done"] + 1, "of": self.drill["laps"]}
+                          if self.drill else None),
+                "drills_done": list(self.drills_done),
+                "race_start": getattr(self, "last_start", None),
                 "corners": corners,
                 "fuel_l": round(f.fuel, 1) if f else None,
                 "tyre_core_temps_c": [round(x) for x in f.tyre_temps] if f and f.tyre_temps else None,
@@ -6301,7 +6680,7 @@ class Crew:
                 if not (self.voice.on_straight.is_set() or self.race_finished or now - created > 6):
                     return
             self.pending.popleft()
-        self.voice.say(text, now, "info", voice=self.voice_for(role), who=role.upper())
+        self.voice.say(text, now, "chat" if chat else "info", voice=self.voice_for(role), who=role.upper())
         self.overlay.post(tip=f"{role.title()}: {text}")
         self.last_spoken = now
 
@@ -7556,6 +7935,14 @@ def write_report(coach, sessions, existing_path=None):
     prog = "".join(f"<tr><td>{html.escape(str(x['date']))}</td><td>{fmt_time(x['best']).replace(' ', ':')}</td>"
                    f"<td>{x['laps']}</td></tr>" for x in sessions[-10:])
     svg = _svg_trace(coach.ref, coach.last_filled, coach.corners)
+    def _sgn(x):
+        return "—" if x is None else f"{x:+.2f}s"
+    drills = getattr(coach, "drills_done", None) or []
+    drills_html = ("<h2>Practice drills</h2><div class=\"wrap\"><table><tr><th>Corner</th><th>Clean laps</th>"
+                   "<th>Avg vs your best, before</th><th>Avg vs your best, during</th><th>Best effort</th></tr>"
+                   + "".join(f"<tr><td>Turn {d['turn']}</td><td>{d['laps']} of {d['planned']}</td><td>{_sgn(d['before'])}</td>"
+                             f"<td>{_sgn(d['avg'])}</td><td>{_sgn(d['best'])}</td></tr>" for d in drills)
+                   + "</table></div>") if drills else ""
     doc = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Coach Report · {html.escape(track)}</title><style>
 :root{{--bg:#fafaf7;--fg:#1d1d1b;--mut:#6b6b66;--line:#e3e2dc;--acc:#2f6f9f;--acc2:#c2552d}}
@@ -7576,7 +7963,7 @@ svg{{width:100%;height:auto;border:1px solid var(--line);border-radius:10px}} .b
 <div class="k"><span>Laps</span><b>{len(times)}</b></div>
 <div class="k"><span>Consistency (σ)</span><b>{stdev(ref_times):.2f}s</b></div></div>
 <p><strong>Next focus:</strong> {focus}.</p>{setup_sheet_html(getattr(coach, "last_setup_sheet", None))}{f'<p><strong>Pre-race setup (Strategist &amp; Coach):</strong> {html.escape(coach.last_setup_briefing["strategist"].replace("k p h", "km/h"))} {html.escape(coach.last_setup_briefing["coach"].replace("k p h", "km/h"))}</p>' if getattr(coach, "last_setup_briefing", None) else ''}
-<h2>Speed trace</h2><div class="legend"><span><i style="background:var(--acc)"></i>Best lap</span><span><i style="background:var(--acc2)"></i>Last lap</span></div>{svg}
+{drills_html}<h2>Speed trace</h2><div class="legend"><span><i style="background:var(--acc)"></i>Best lap</span><span><i style="background:var(--acc2)"></i>Last lap</span></div>{svg}
 <h2>Turn by turn</h2><div class="wrap"><table><tr><th>Corner</th><th>Avg loss vs your best</th><th>Variation</th><th>Best min speed (km/h)</th><th>Lock-ups</th><th>Wheelspin</th><th>Most common issue</th></tr>{trows}</table></div>
 <h2>Laps</h2><div class="wrap"><table><tr><th>Lap</th><th>Time</th><th>Gap to best</th></tr>{lrows}</table></div>
 <h2>Progress</h2><div class="wrap"><table><tr><th>Session</th><th>Best</th><th>Laps</th></tr>{prog}</table></div>
@@ -8193,6 +8580,33 @@ class SetupApplier:
             return {"key": k, "op": "delta", "val": d, "badge": f"{k.upper().replace('_', '/')} {d:+d} ✓"}
         return {"key": "custom", "op": "set", "val": change, "badge": "Applied ✓"}
 
+    _PREVIEW = (("fuel_load", "Fuel", "{:g} L"), ("pit_stops", "Pit stops", "{}"), ("tyre_compound", "Tyres", "{}"),
+                ("press_psi", "Pressures FL/FR/RL/RR", "{} psi"), ("brake_bias_pct", "Brake bias", "{:g}%"),
+                ("brake_ducts", "Brake ducts F/R", "{}"), ("rear_wing", "Rear wing", "{}"),
+                ("ride_height_mm", "Ride height FL/FR/RL/RR", "{} mm"), ("arb_front", "Front anti-roll bar", "{}"),
+                ("arb_rear", "Rear anti-roll bar", "{}"), ("dampers_front", "Front dampers", "{}"),
+                ("dampers_rear", "Rear dampers", "{}"), ("diff_preload", "Diff preload", "{} Nm"),
+                ("tc", "Traction control", "{}"), ("abs", "ABS", "{}"), ("fuel_per_lap", "Fuel per lap", "{:g} L"))
+
+    @classmethod
+    def preview(cls, sheet: dict, applied_after) -> list:
+        """What ticking exactly `applied_after` would change, against what's applied now: [(label, before, after)]."""
+        before, _ = cls.compute_state(sheet)
+        after, _ = cls.compute_state(dict(sheet, applied=sorted(set(applied_after))))
+        out = []
+        for key, label, fmt in cls._PREVIEW:
+            b, a = before.get(key), after.get(key)
+            if b == a:
+                continue
+            def show(x):
+                if not isinstance(x, list):
+                    return fmt.format(x)
+                vals = [f"{y:g}" if isinstance(y, float) else str(y) for y in x]
+                return fmt.format(vals[0] if len(set(vals)) == 1 else "/".join(vals))
+            same = isinstance(a, list) and isinstance(b, list) and len(set(map(str, a))) == 1 and len(set(map(str, b))) == 1
+            out.append((label.split(" FL/")[0].split(" F/R")[0] if same else label, show(b), show(a)))
+        return out
+
     @classmethod
     def compute_state(cls, sheet: dict) -> tuple[dict, dict]:
         """Return (resolved_state, badges_by_idx) for the currently ticked indices in sheet['applied']."""
@@ -8587,6 +9001,19 @@ class Conversation:
         laps = f", about {_laps_left(fr.energy / epl)}" if epl else ""
         return f"Virtual energy {fr.energy * 100:.0f} percent{laps}."
 
+    _NUM_WORDS = {w: i for i, w in enumerate(("zero one two three four five six seven eight nine ten eleven twelve "
+                                              "thirteen fourteen fifteen sixteen seventeen eighteen nineteen "
+                                              "twenty").split())}
+    _NUM_WORDS.update({"won": 1, "to": 2, "too": 2, "for": 4, "tree": 3, "ate": 8})
+    _RE_DRILL = re.compile(r"\b(?:work on|practi[cs]e|drill|focus on)\s+(?:turn|corner|t)\s*([a-z0-9]+)"
+                           r"(?:\s+(?:for\s+)?(?:the\s+next\s+)?([a-z0-9]+)\s+laps?)?")
+    _RE_DRILL_STOP = re.compile(r"\b(?:stop|end|cancel|finish|quit)\s+(?:the\s+|this\s+|my\s+)?(?:drill|practice drill)\b")
+
+    def _num(self, w):
+        if w is None:
+            return None
+        return int(w) if w.isdigit() else self._NUM_WORDS.get(w)
+
     def local(self, t):
         """Instant commands. Anything that changes settings or data must be a short, explicit command,
         so questions like "should I reset my brake bias?" go to the engineer instead."""
@@ -8595,6 +9022,11 @@ class Conversation:
         t = t.strip().lower().rstrip(".!?")
         if len(t.split()) > 10:
             return None
+        if self._RE_DRILL_STOP.search(t):
+            return c.stop_drill()
+        m_dr = self._RE_DRILL.search(t)
+        if m_dr and self._num(m_dr.group(1)):
+            return c.start_drill(self._num(m_dr.group(1)) - 1, self._num(m_dr.group(2)) or 5)
         if self._RE_RADIO.search(t):
             return f"Loud and clear, {self.cfg.get('driver_name') or 'driver'}."
         if self._RE_SHEET_CLOSE.search(t):
@@ -8604,10 +9036,16 @@ class Conversation:
             if not c.last_setup_sheet:
                 c.collaborate_race_setup(c.last_frame, time.monotonic(), speak=False, use_openai=False, show=False)
             if c.last_setup_sheet:
-                SetupApplier.apply_all(c.last_setup_sheet, enabled=True, coach=c, log=self.log)
-                n_it = len(c.last_setup_sheet.get("items") or [])
-                self.overlay.post(setup_sheet=c.last_setup_sheet, setup_popup=not (c.last_frame and c.live() and c.last_frame.speed > 3))
-                return f"Applied all {n_it} setup changes in the sim."
+                sheet = c.last_setup_sheet
+                changes = SetupApplier.preview(sheet, range(len(sheet.get("items") or [])))
+                SetupApplier.apply_all(sheet, enabled=True, coach=c, log=self.log)
+                self.overlay.post(setup_sheet=sheet, setup_popup=not (c.last_frame and c.live() and c.last_frame.speed > 3))
+                if not changes:
+                    return "Setup's already applied, nothing to change."
+                said = ", ".join(f"{lbl.split(' FL/')[0].lower()} {a}" for lbl, _b, a in changes[:3])
+                said = said.replace(" L", " litres").replace("%", " percent").replace(" Nm", " newton metres")
+                more = f", and {len(changes) - 3} more on the sheet" if len(changes) > 3 else ""
+                return f"Applied {len(changes)} setup change{'s' if len(changes) != 1 else ''}: {said}{more}."
         if self._RE_SHEET.search(t) and c.last_setup_sheet:
             c._sheet_wait = None
             self.overlay.post(setup_sheet=c.last_setup_sheet, setup_popup=True)
@@ -9240,11 +9678,21 @@ class SetupSheetWindow:
         st_l.configure(text=badge_txt if done else "Apply", fg=C["good"] if done else C["mut"],
                        font=self.font(9, done))
 
+    def _confirm(self, text):
+        try:
+            from tkinter import messagebox
+            return bool(messagebox.askyesno("Apply setup", text, parent=self.win))
+        except Exception:
+            return False
+
     def _ticked(self, item):
         idx, var, *_ = item
         done = bool(var.get())
+        applied = set(self.sheet.get("applied") or ())
+        changes = SetupApplier.preview(self.sheet, (applied | {idx}) if done else (applied - {idx}))
         res = SetupApplier.toggle_item(self.sheet, idx, enabled=done)
-        self._last_status = res.get("status", "")
+        what = "; ".join(f"{lbl} {b} → {a}" for lbl, b, a in changes[:2])
+        self._last_status = (("Applied: " if done else "Reverted: ") + what) if what else res.get("status", "")
         self._style_row(item)
         self._update_progress()
 
@@ -9267,9 +9715,20 @@ class SetupSheetWindow:
         self._update_progress()
 
     def apply_all(self):
-        """Apply all setup changes in the sim (or revert all if every box is already ticked)."""
+        """Apply all setup changes in the sim (or revert all if every box is already ticked). Applying asks first,
+        listing every value that will change."""
         all_done = bool(self.checks) and all(it[1].get() for it in self.checks)
         target = not all_done
+        if target:
+            changes = SetupApplier.preview(self.sheet, [it[0] for it in self.checks])
+            if not changes:
+                self._last_status = "Nothing to change: these values are already set"
+                self._update_progress()
+                return
+            listing = "\n".join(f"  {lbl}:  {b}  →  {a}" for lbl, b, a in changes)
+            if not self._confirm(f"Apply {len(changes)} change{'s' if len(changes) != 1 else ''} in the sim?\n\n{listing}\n\n"
+                                 "Before values are SimCoach's setup profile, which can differ from your garage setup."):
+                return
         for it in self.checks:
             it[1].set(target)
             self._style_row(it)
@@ -9316,6 +9775,126 @@ class SetupSheetWindow:
         except Exception:
             pass
         self.win = None
+
+
+
+# --- second screen: a read-only live page for a phone or tablet on the same network --------------------------
+SECOND_SCREEN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>SimCoach live</title>
+<style>
+:root{--bg:#0b0f14;--panel:#121821;--line:#263142;--fg:#e6edf3;--mut:#8d99a8;--good:#34d399;--bad:#f87171;--tip:#fcd34d;--acc:#3d8bfd}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+padding:12px 16px env(safe-area-inset-bottom)}header{display:flex;justify-content:space-between;align-items:baseline;gap:8px;color:var(--mut);font-size:13px}
+#delta{font:700 clamp(64px,22vw,180px)/1 ui-monospace,Menlo,Consolas,monospace;text-align:center;margin:10px 0 4px;letter-spacing:-2px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:8px}
+.k{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}.k span{display:block;color:var(--mut);font-size:12px}
+.k b{font-size:22px;font-variant-numeric:tabular-nums}.k small{display:block;color:var(--mut);font-size:13px}.msg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:8px}
+.msg span{color:var(--mut);font-size:12px;display:block}#focus{color:var(--tip)}#off{color:var(--mut);text-align:center;margin-top:30px}
+</style></head><body>
+<header><b id="title">SimCoach</b><span id="status">connecting…</span></header>
+<div id="delta">--.--</div>
+<div class="grid">
+<div class="k"><span>Lap</span><b id="lap">–</b></div><div class="k"><span>Last</span><b id="last">–</b></div>
+<div class="k"><span>Best</span><b id="best">–</b></div><div class="k"><span>Position</span><b id="pos">–</b></div>
+<div class="k"><span>Gap ahead</span><b id="ga">–</b></div><div class="k"><span>Gap behind</span><b id="gb">–</b></div>
+<div class="k"><span>Fuel</span><b id="fuel">–</b><small id="fuellaps"></small></div><div class="k"><span>Speed · gear</span><b id="spd">–</b></div>
+</div>
+<div class="msg"><span>Focus</span><div id="focus">–</div></div>
+<div class="msg"><span>Coach</span><div id="coach">–</div></div>
+<script>
+const $=id=>document.getElementById(id);let fails=0;
+async function tick(){try{const r=await fetch('data.json',{cache:'no-store'});const d=await r.json();fails=0;
+$('title').textContent=d.track?`${d.track} · ${d.car}`:'SimCoach '+d.version;
+$('status').textContent=d.live?(d.sim||'live'):'waiting for a sim';
+$('delta').textContent=d.delta||'--.--';$('delta').style.color=d.delta_color||'';
+$('lap').textContent=d.lap??'–';$('last').textContent=d.last||'–';$('best').textContent=d.best||'–';
+$('pos').textContent=d.pos?('P'+d.pos+(d.cars?' / '+d.cars:'')):'–';
+$('ga').textContent=d.gap_ahead!=null?d.gap_ahead.toFixed(1)+' s':'–';$('gb').textContent=d.gap_behind!=null?d.gap_behind.toFixed(1)+' s':'–';
+$('fuel').textContent=d.fuel??'–';$('fuellaps').textContent=d.fuel_laps!=null?'about '+d.fuel_laps+' laps left':'';
+$('spd').textContent=d.speed!=null?d.speed+' · '+(d.gear>0?d.gear:d.gear==0?'N':'R'):'–';
+$('focus').textContent=d.focus||'–';$('coach').textContent=d.coach||'–';}
+catch(e){if(++fails>3)$('status').textContent='SimCoach not reachable';}}
+setInterval(tick,250);tick();
+</script></body></html>"""
+
+
+def lan_ip():
+    """This PC's address on the local network (no packets are sent)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.168.255.255", 1))
+        return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+class SecondScreen:
+    """Serves SECOND_SCREEN_HTML and a JSON snapshot. Read-only: nothing on the page can change SimCoach."""
+
+    def __init__(self, snapshot, log=print, token=""):
+        self.snapshot, self.log = snapshot, log
+        self.httpd, self.port = None, None
+        self.token = token or "live"     # secret part of the address: only people you give the link to can open it
+
+    def running(self):
+        return self.httpd is not None
+
+    def url(self):
+        return f"http://{lan_ip()}:{self.port}/{self.token}/" if self.port else ""
+
+    def start(self, port, host="0.0.0.0"):
+        if self.httpd is not None and self.port == port:
+            return True
+        self.stop()
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        snap, page, base = self.snapshot, SECOND_SCREEN_HTML.encode("utf-8"), f"/{self.token}/"
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                path = self.path.split("?", 1)[0]
+                if path in (base, base + "index.html"):
+                    body, ctype = page, "text/html; charset=utf-8"
+                elif path == base + "data.json":
+                    try:
+                        body = json.dumps(snap(), separators=(",", ":")).encode("utf-8")
+                    except Exception as e:
+                        body = json.dumps({"error": str(e)}).encode("utf-8")
+                    ctype = "application/json"
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        try:
+            httpd = ThreadingHTTPServer((host, int(port)), H)
+        except OSError as e:
+            self.log(f"Phone screen couldn't start on port {port}: {e}")
+            return False
+        httpd.daemon_threads = True
+        self.httpd, self.port = httpd, int(port)
+        threading.Thread(target=httpd.serve_forever, daemon=True, name="second-screen").start()
+        self.log(f"Phone screen on: open {self.url()} on a phone or tablet on the same Wi-Fi.")
+        return True
+
+    def stop(self):
+        h, self.httpd, self.port = self.httpd, None, None
+        if h is not None:
+            try:
+                h.shutdown()
+                h.server_close()
+            except Exception:
+                pass
 
 
 class App:
@@ -9375,6 +9954,12 @@ class App:
         r.after(1000, self._refresh_tables)
         if cfg.get("auto_start"):
             r.after(800, self.start_coach)
+        if not self.cfg.get("second_screen_token"):
+            import secrets
+            self.cfg["second_screen_token"] = secrets.token_urlsafe(9)
+            save_config(self.cfg)
+        self.screen = SecondScreen(self._screen_data, self.log, self.cfg["second_screen_token"])
+        r.after(300, self._apply_second_screen)
         if not cfg.get("driver_name") and not cfg.get("name_asked"):
             r.after(400, self._ask_name)
 
@@ -9996,6 +10581,11 @@ class App:
         self.vars["udp_share_simhub"] = tk.BooleanVar(value=bool(self.cfg.get("udp_share_simhub", True)))
         ttk.Checkbutton(c, text="Share F1 25 / DiRT Rally 2.0 telemetry with SimHub",
                         variable=self.vars["udp_share_simhub"]).pack(anchor="w", pady=(4, 0))
+        self.vars["second_screen"] = tk.BooleanVar(value=bool(self.cfg.get("second_screen")))
+        ttk.Checkbutton(c, text="Phone / tablet live screen (same Wi-Fi)",
+                        variable=self.vars["second_screen"]).pack(anchor="w", pady=(4, 0))
+        self.screen_lbl = ttk.Label(c, text="", style="Mut.TLabel")
+        self.screen_lbl.pack(anchor="w")
 
         rc = self._card(right, fill="x", pady=(8, 0))
         ttk.Label(rc, text="Race engineer, strategist & spotter", style="Sec.TLabel").pack(anchor="w", pady=(0, 2))
@@ -10235,7 +10825,48 @@ class App:
         print(msg)
 
     def post(self, **kw):
+        live = self.__dict__.setdefault("_live", {})
+        for k in ("delta", "delta_color", "focus", "tip"):
+            if k in kw:
+                live[k] = kw[k]
         self.inbox.put(kw)
+
+    def _screen_data(self):
+        """What the phone page shows (read without the coach lock: display values only)."""
+        c, live = self.coach, dict(getattr(self, "_live", {}))
+        with c.lock:                     # a consistent copy: the telemetry thread updates these
+            f = c.last_frame if c.live() else None
+            best_t = c.best_time
+            fpl = c.crew.fuel_per_lap() if (f is not None and c.crew) else None
+
+        def text(x):  # spoken spellings back to written ones
+            if not x:
+                return None
+            x = re.sub(r"^Focus\s+·\s+", "", str(x)).replace(" k p h", " km/h")
+            return _RE_SPOKEN_TIME.sub(r"\1:\2", x)
+
+        def lap(t):
+            return fmt_time(t).replace(" ", ":", 1)
+        d = {"version": APP_VERSION, "live": f is not None, "delta": live.get("delta", "--.--"),
+             "delta_color": live.get("delta_color"), "focus": text(live.get("focus")), "coach": text(live.get("tip"))}
+        if f is None:
+            return d
+        d.update(sim=f.game, track=nice_name(f.track), car=nice_name(f.car), lap=f.laps_done + 1,
+                 last=lap(f.last_time) if f.last_time > 10 else None,
+                 best=lap(best_t) if best_t else None, pos=f.position or None, cars=f.cars or None,
+                 gap_ahead=f.gap_ahead, gap_behind=f.gap_behind, speed=int(round(f.speed)), gear=f.gear,
+                 fuel=(f"{f.fuel:.1f} {'kg' if f.game in KG_FUEL_GAMES else 'L'}" if f.fuel > 0 else None),
+                 fuel_laps=(int(f.fuel / fpl) if (fpl and f.fuel > 0) else None))
+        return d
+
+    def _apply_second_screen(self):
+        if self.cfg.get("second_screen"):
+            self.screen.start(self.cfg.get("second_screen_port", 8765))
+        else:
+            self.screen.stop()
+        if hasattr(self, "screen_lbl"):
+            self.screen_lbl.configure(text=(f"Open {self.screen.url()} on your phone (same Wi-Fi)"
+                                            if self.screen.running() else ""))
 
     def _btn_repeat(self):
         self.voice.say(self.voice.last_text or "Nothing to repeat yet.", time.monotonic(), "urgent")
@@ -10471,6 +11102,7 @@ class App:
         self.cfg["crew_chatter"] = _CHATTER_BY_LABEL.get(v["crew_chatter"].get(), "normal")
         self.cfg["crew_language"] = _LANGUAGE_BY_LABEL.get(v["crew_language"].get(), "clean")
         self.cfg["udp_share_simhub"] = bool(v["udp_share_simhub"].get())
+        self.cfg["second_screen"] = bool(v["second_screen"].get())
         _UDPPort.share = self.cfg["udp_share_simhub"]
         self.cfg["whisper_model"] = _WHISPER_BY_LABEL.get(v["whisper_model"].get(), "small.en")
         self.cfg["ai_provider"] = _AI_BY_LABEL.get(v["ai_provider"].get(), "openai")
@@ -10492,6 +11124,7 @@ class App:
             else:
                 self._close_readers()
         save_config(self.cfg)
+        self._apply_second_screen()
         if self.mute_var.get():
             self.cfg["talk_level"] = 0
         if (self.cfg.get("audio_out"), self.cfg.get("volume")) != old_audio:
@@ -10918,6 +11551,10 @@ class App:
         self.ov_cv.bind("<Button-3>", self._ov_menu)
 
     def quit(self):
+        try:
+            self.screen.stop()
+        except Exception:
+            pass
         if self.listener is not None:
             self.listener.stop.set()
         if self.running:
