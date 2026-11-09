@@ -7,8 +7,9 @@ Quick start & installation (Windows 10 / 11)
     * Installs for your Windows account only (no admin rights needed) into %LOCALAPPDATA%\Programs\SimCoach,
       adds SimCoach (with its own icon) to the desktop and Start menu, and registers an Uninstall entry
       under Settings > Apps > Installed apps.
-    * The setup window downloads uv (the Python runner), Python 3.12, SimCoach's packages, and offline
-      speech recognition (about 1 GB, a few minutes) so the first launch opens straight away.
+    * The setup window downloads uv (the Python runner, from github.com/astral-sh/uv), Python 3.12,
+      SimCoach's packages, and offline speech recognition (about 1 GB, a few minutes) so the first launch
+      opens straight away.
     * Because the installer isn't code-signed, Windows SmartScreen may show "Windows protected your PC":
       click "More info", then "Run anyway".
     * Updating: run a newer SimCoach-Setup.exe over the top (it closes any running SimCoach first and saves
@@ -112,7 +113,7 @@ On track: live coaching & voice commands
     * Audio & display controls: "be quiet", "normal coaching", "talk more", "braking tones on / off / every
       corner", "split deltas on / off", "start capture", "stop capture"
     * Open questions ("where am I losing time?", "how do I fix understeer in Turn 3?"): answered using your
-      live session telemetry when an OpenAI API key is configured in Settings.
+      live session telemetry when an AI key (OpenAI, Google Gemini or DeepSeek) is configured in Settings.
 
 
 Race crew (Engineer, Strategist & Spotter)
@@ -164,8 +165,11 @@ Tabs & settings
     * Coaching: talk level (Quiet / Normal / Chatty), Coach personality (Apex pro synthesis, Suellio
       Almeida, Scott Mansell, Ross Bentley, David Perel, or Nils Naujoks), braking tones, split deltas,
       auto-start, F1 UDP port, and SimHub port sharing.
-    * Conversation (OpenAI): paste your OpenAI API key and click "Test key". Stored locally in
-      %APPDATA%\SimCoach\config.json (or set on the "openai_api_key" line near the top of sim_coach.py).
+    * Conversation (AI): pick the AI provider (OpenAI, Google Gemini or DeepSeek), paste its API key and
+      click "Test key". Keys are stored locally in %APPDATA%\SimCoach\config.json (or set the
+      OPENAI_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY environment variable). With "try my other keys"
+      ticked, if the chosen provider is down or busy SimCoach asks the next one you have a key for.
+      Online speech recognition always uses the OpenAI key.
   - References: view, delete, export, and import reference laps (%APPDATA%\SimCoach\references). Import a
     faster driver's reference JSON to be coached against their lap.
   - Reports: browse, open, write mid-session snapshots, or delete HTML Coach Reports, text after-race

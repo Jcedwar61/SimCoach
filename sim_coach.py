@@ -67,6 +67,7 @@ except Exception:
     _np = None
 from typing import Optional
 
+APP_VERSION = "6.2"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -85,6 +86,12 @@ DEFAULT_CONFIG = {
     "openai_api_key": "",
     "openai_model": "gpt-6-luna",
     "openai_stt_model": "gpt-transcribe",
+    "ai_provider": "openai",
+    "ai_fallback": True,
+    "gemini_api_key": "",
+    "gemini_model": "gemini-3.5-flash",
+    "deepseek_api_key": "",
+    "deepseek_model": "deepseek-chat",
     "talk_level": 1,
     "overlay_pedals": True,
     "overlay_locked": False,
@@ -118,6 +125,8 @@ def fuel_unit(game, n=None):
     return u if n == 1 else u + "s"
 
 OPENAI_MODELS = ["gpt-6-luna", "gpt-6.1-terra", "gpt-5.6-luna"]
+GEMINI_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-flash-latest"]
+DEEPSEEK_MODELS = ["deepseek-chat", "deepseek-flash", "deepseek-v4-pro", "deepseek-reasoner"]
 RETIRED_OPENAI_MODELS = ("gpt-4o", "gpt-4.1", "gpt-4-", "gpt-3.5")
 WHISPER_MODELS = [("Fast (base.en)", "base.en"), ("Balanced (small.en)", "small.en"),
                   ("Most accurate (medium.en)", "medium.en"), ("OpenAI online (uses key)", "openai")]
@@ -349,14 +358,17 @@ def load_config():
         cfg["buttons"]["ptt"] = {"device": cfg["ptt_device"], "guid": None, "index": 0, "button": cfg["ptt_button"]}
     cfg.pop("ptt_device", None)
     cfg.pop("ptt_button", None)
-    cfg.pop("gemini_api_key", None)
-    cfg.pop("gemini_model", None)
     cfg["openai_api_key"] = (cfg.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
                              or DEFAULT_CONFIG["openai_api_key"] or "").strip()
     model = (cfg.get("openai_model") or os.environ.get("OPENAI_MODEL") or "").strip()
     if not model or model.startswith(RETIRED_OPENAI_MODELS):
         model = DEFAULT_CONFIG["openai_model"]
     cfg["openai_model"] = model
+    if cfg.get("ai_provider") not in ("openai", "gemini", "deepseek"):
+        cfg["ai_provider"] = "openai"
+    for p in ("gemini", "deepseek"):
+        cfg[f"{p}_api_key"] = (cfg.get(f"{p}_api_key") or "").strip()
+        cfg[f"{p}_model"] = (cfg.get(f"{p}_model") or "").strip() or DEFAULT_CONFIG[f"{p}_model"]
     try:
         ver = int(cfg.get("config_version", 1))
     except (TypeError, ValueError, OverflowError):
@@ -5276,7 +5288,7 @@ class Coach:
                                use_openai: bool = True, user_query: str = "", show: bool = False) -> tuple[str, str]:
         """Before the race begins (or when requested), the Strategist and Coach work together to recommend
         an optimal setup for the race based on track geometry, weather/rain, race length, fuel, tyre temps/pressures,
-        and the driver's telemetry tendencies. Uses OpenAI when an API key is configured, with built-in fallback."""
+        and the driver's telemetry tendencies. Uses the chosen AI provider when an API key is configured, with built-in fallback."""
         with self.lock:
             f = f or self.last_frame
             sim_name = (f.game if f else (self.key[0] if self.key else "Sim")) or "Sim"
@@ -5493,8 +5505,7 @@ class Coach:
                      "grid": f"Start P{f.position}" + (f" of {f.cars}" if f.cars else "") if (f and f.position) else "",
                      "items": items, "strategist": strat_line, "coach": coach_line, "source": "Built-in advisor",
                      "made": time.strftime("%d %b %H:%M"), "key": (self.key, self.session_id)}
-            api_key = (self.cfg.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
-                       or DEFAULT_CONFIG["openai_api_key"] or "").strip()
+            api_key = ai_key(self.cfg)
             is_test_sim = (sim_name == "TEST")
 
         if use_openai and api_key and not (speak and is_test_sim):
@@ -5579,9 +5590,8 @@ class Coach:
 
     def _fetch_openai_setup(self, api_key: str, setup_ctx: dict,
                             fallback_strat: str, fallback_coach: str) -> tuple:
-        """Call OpenAI to generate a race-specific Strategist + Coach setup briefing tailored to the car, track,
+        """Ask the chosen AI for a race-specific Strategist + Coach setup briefing tailored to the car, track,
         weather, race length, and driver telemetry."""
-        model = self.cfg.get("openai_model") or DEFAULT_CONFIG["openai_model"]
         driver = self.cfg.get("driver_name") or "the driver"
         p_key = self.cfg.get("coach_personality", "apex")
         coach_persona = COACH_PERSONA_PROMPTS.get(p_key, COACH_PERSONA_PROMPTS["apex"]).format(name=driver)
@@ -5607,19 +5617,18 @@ class Coach:
         )
         user_msg = f"RACE & TELEMETRY CONDITIONS: {json.dumps(setup_ctx, separators=(',', ':'))}"
         try:
-            raw = openai_chat(
-                api_key,
-                model,
+            raw, who = ai_chat_ex(
+                self.cfg,
                 [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
                 max_tokens=700,
             )
             s_out, c_out = parse_setup_dialogue(raw, fallback_strat, fallback_coach)
             if s_out == fallback_strat or c_out == fallback_coach:
-                self.log("OpenAI's setup reply was incomplete; using the built-in setup advisor.")
+                self.log(f"{who}'s setup reply was incomplete; using the built-in setup advisor.")
                 return fallback_strat, fallback_coach, "built-in (fallback)", None
-            return s_out, c_out, f"OpenAI {model}", parse_setup_sheet(raw)
+            return s_out, c_out, who, parse_setup_sheet(raw)
         except Exception as e:
-            self.log(f"OpenAI pre-race setup unavailable ({type(e).__name__}: {e}); using built-in setup advisor.")
+            self.log(f"AI pre-race setup unavailable ({type(e).__name__}: {e}); using built-in setup advisor.")
             return fallback_strat, fallback_coach, "built-in (fallback)", None
 
     def _openai_setup_worker(self, api_key: str, setup_ctx: dict, fallback_strat: str, fallback_coach: str,
@@ -6204,7 +6213,7 @@ class Crew:
     - Introduce themselves when a session starts.
     - After every lap (from lap one): a short engineer report and, in races, a strategist report.
     - Alerts the moment something happens (fuel, box, damage, positions, last lap, rain).
-    - Casual chatter: reactions and light banter on quiet straights (OpenAI when a key is set, built-in lines otherwise).
+    - Casual chatter: reactions and light banter on quiet straights (the AI when a key is set, built-in lines otherwise).
     News waits for the coach to finish and for a straight; chatter only ever fills quiet moments; the spotter cuts in."""
 
     def __init__(self, cfg, voice, overlay, log=print, coach=None):
@@ -6301,7 +6310,7 @@ class Crew:
 
     def chatter(self, role, event, facts, now, force=False, reaction=False):
         """One casual line in character. Rate-limited (reactions to something that just happened get through
-        sooner than idle banter); OpenAI writes it when a key is set, else a built-in line."""
+        sooner than idle banter); the AI writes it when a key is set, else a built-in line."""
         level = self.chatter_level()
         if level == "off" or not self.on(role):
             return
@@ -6311,8 +6320,7 @@ class Crew:
         self.last_chat = now
         gen = getattr(self, "_gen", 0)
         line = self._canned(role, event, facts)
-        key = (self.cfg.get("openai_api_key") or os.environ.get("OPENAI_API_KEY") or DEFAULT_CONFIG["openai_api_key"] or "").strip()
-        if not key:
+        if not ai_key(self.cfg):
             self.say(role, line, now, chat=True)
             return
 
@@ -6326,8 +6334,8 @@ class Crew:
                            + (" Swearing and slang are welcome: the driver likes rough, good-natured banter. Keep it "
                               "friendly ribbing, no slurs, nothing hateful." if self.salty() else " Keep it clean."))
                 msg = f"Moment: {CHATTER_EVENTS.get(event, event)}. Facts: {json.dumps(facts)}"
-                text = openai_chat(key, self.cfg.get("openai_model") or DEFAULT_CONFIG["openai_model"],
-                                   [{"role": "system", "content": sys_msg}, {"role": "user", "content": msg}], max_tokens=40)
+                text = ai_chat(self.cfg, [{"role": "system", "content": sys_msg}, {"role": "user", "content": msg}],
+                               max_tokens=40)
                 text = text.strip().strip('"').replace("*", "")
                 if len(text.split()) > 22:
                     text = None
@@ -7018,7 +7026,8 @@ class Crew:
         self.tl["last"] = n
         if last is not None and n > last and f.session in ("race", "qualifying") and now - self.tl["t"] > 8.0:
             self.tl["t"] = now
-            self.say("engineer", "Track limits strike. Keep it inside the white lines.", now)
+            count = f" That's {n} now." if 1 < n < 50 else ""
+            self.say("engineer", f"Track limits strike.{count} Keep it inside the white lines.", now)
 
     def _wear_check(self, f, now):
         E = self.eng
@@ -7714,25 +7723,65 @@ def parse_setup_sheet(raw):
     return out or None
 
 
-# --- OpenAI helpers -------------------------------------------------------------------------------------------
+# --- AI providers (OpenAI, Google Gemini, DeepSeek) -----------------------------------------------------------
+# Gemini and DeepSeek both serve OpenAI-compatible chat endpoints, so one client library covers all three.
+AI_PROVIDERS = OrderedDict((
+    ("openai", {"name": "OpenAI", "label": "OpenAI (GPT)", "base_url": None, "env": "OPENAI_API_KEY",
+                "models": OPENAI_MODELS, "key_url": "https://platform.openai.com/api-keys",
+                "tokens": "max_completion_tokens", "extra": {}}),
+    ("gemini", {"name": "Gemini", "label": "Google Gemini", "env": "GEMINI_API_KEY",
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+                "models": GEMINI_MODELS, "key_url": "https://aistudio.google.com/apikey",
+                # Short radio replies: keep thinking light so answers come back fast.
+                "tokens": "max_tokens", "extra": {"reasoning_effort": "low"}}),
+    ("deepseek", {"name": "DeepSeek", "label": "DeepSeek", "base_url": "https://api.deepseek.com",
+                  "env": "DEEPSEEK_API_KEY", "models": DEEPSEEK_MODELS,
+                  "key_url": "https://platform.deepseek.com/api_keys", "tokens": "max_tokens", "extra": {}}),
+))
+_AI_LABELS = [p["label"] for p in AI_PROVIDERS.values()]
+_AI_BY_LABEL = {p["label"]: k for k, p in AI_PROVIDERS.items()}
+
 _OPENAI_CLIENTS = {}
 _OPENAI_LOCK = threading.Lock()
 
 
 class OpenAIReplyError(RuntimeError):
-    """OpenAI answered, but with nothing usable (empty, cut off, refused or filtered). The message is speakable."""
+    """The AI answered, but with nothing usable (empty, cut off, refused or filtered). The message is speakable."""
 
 
-def openai_client(key):
-    """One OpenAI client per API key, reused (each new client opens its own connection pool)."""
+def ai_provider(cfg):
+    p = (cfg or {}).get("ai_provider") or "openai"
+    return p if p in AI_PROVIDERS else "openai"
+
+
+def ai_key(cfg, provider=None):
+    p = provider or ai_provider(cfg)
+    return ((cfg or {}).get(f"{p}_api_key") or os.environ.get(AI_PROVIDERS[p]["env"])
+            or DEFAULT_CONFIG.get(f"{p}_api_key") or "").strip()
+
+
+def ai_model(cfg, provider=None):
+    p = provider or ai_provider(cfg)
+    return ((cfg or {}).get(f"{p}_model") or DEFAULT_CONFIG[f"{p}_model"]).strip()
+
+
+def ai_label(cfg, provider=None):
+    """'Gemini gemini-3.5-flash': who answers, for the radio screen and setup sheets."""
+    p = provider or ai_provider(cfg)
+    return f"{AI_PROVIDERS[p]['name']} {ai_model(cfg, p)}"
+
+
+def openai_client(key, base_url=None):
+    """One client per (API key, endpoint), reused (each new client opens its own connection pool)."""
     import openai
     key = (key or "").strip()
     if not key:
-        raise ValueError("no OpenAI API key")
+        raise ValueError("no API key")
     with _OPENAI_LOCK:
-        c = _OPENAI_CLIENTS.get(key)
+        c = _OPENAI_CLIENTS.get((key, base_url))
         if c is None:
-            c = _OPENAI_CLIENTS[key] = openai.OpenAI(api_key=key, timeout=20.0, max_retries=1)
+            c = _OPENAI_CLIENTS[(key, base_url)] = openai.OpenAI(api_key=key, base_url=base_url, timeout=20.0,
+                                                                 max_retries=1)
         return c
 
 
@@ -7755,71 +7804,120 @@ def _mct_unsupported(exc):
     return bool(_RE_UNSUPPORTED_MCT.search(text))
 
 
-def openai_chat(key, model, messages, max_tokens=300, timeout=20.0):
-    """Chat completion text. max_completion_tokens counts a reasoning model's thinking too, so a small budget can
-    come back empty or cut off: that is retried once with a bigger budget, then raised as OpenAIReplyError
-    (never returned as '' or as half a sentence to be spoken)."""
+def openai_chat(key, model, messages, max_tokens=300, timeout=20.0, provider="openai"):
+    """Chat completion text from any provider in AI_PROVIDERS. max_completion_tokens counts a reasoning model's
+    thinking too, so a small budget can come back empty or cut off: that is retried once with a bigger budget,
+    then raised as OpenAIReplyError (never returned as '' or as half a sentence to be spoken)."""
     import openai
-    client = openai_client(key).with_options(timeout=timeout)
+    spec = AI_PROVIDERS.get(provider) or AI_PROVIDERS["openai"]
+    name = spec["name"]
+    client = openai_client(key, spec["base_url"]).with_options(timeout=timeout)
     kw = {"model": model, "messages": messages}
-    param = ["max_completion_tokens"]
+    extra = dict(spec["extra"])
+    param = [spec["tokens"]]
 
     def request(budget):
-        try:
-            return client.chat.completions.create(**kw, **{param[0]: budget})
-        except openai.BadRequestError as e:
-            if param[0] != "max_completion_tokens" or not _mct_unsupported(e):
-                raise
-            param[0] = "max_tokens"
-            return client.chat.completions.create(**kw, **{param[0]: budget})
+        while True:
+            try:
+                # Provider-specific options go in the JSON body, so an older openai package never rejects them.
+                return client.chat.completions.create(**kw, **{param[0]: budget}, **({"extra_body": extra} if extra else {}))
+            except openai.BadRequestError as e:
+                if param[0] == "max_completion_tokens" and _mct_unsupported(e):
+                    param[0] = "max_tokens"
+                    continue
+                # An optional tuning parameter this model doesn't take: drop it and ask again.
+                bad = next((k for k in extra if re.search(rf"\b{re.escape(k)}\b", str(e))), None)
+                if bad is None:
+                    raise
+                extra.pop(bad)
 
     budgets = (max_tokens, max(1024, max_tokens * 4))
     for attempt, budget in enumerate(budgets):
         r = request(budget)
         if not r.choices:
-            raise OpenAIReplyError("OpenAI sent back nothing. Try again.")
+            raise OpenAIReplyError(f"{name} sent back nothing. Try again.")
         choice = r.choices[0]
         msg = choice.message
         if getattr(msg, "refusal", None):
-            raise OpenAIReplyError("OpenAI declined to answer that one.")
+            raise OpenAIReplyError(f"{name} declined to answer that one.")
         if choice.finish_reason == "content_filter":
-            raise OpenAIReplyError("OpenAI filtered that answer. Try asking it another way.")
+            raise OpenAIReplyError(f"{name} filtered that answer. Try asking it another way.")
         text = (msg.content or "").strip()
         cut = choice.finish_reason == "length"
         if text and not cut:
             return text
         if attempt == 0:
             continue
-        raise OpenAIReplyError("OpenAI ran out of room for an answer. Try a shorter question or another model."
-                               if cut else "OpenAI sent an empty answer. Try again.")
+        raise OpenAIReplyError(f"{name} ran out of room for an answer. Try a shorter question or another model."
+                               if cut else f"{name} sent an empty answer. Try again.")
 
 
-def openai_problem(e):
-    """A short spoken explanation of an OpenAI failure (the key test strips ' Check it in Settings.')."""
+def _ai_transient(e):
+    """A failure worth retrying on another provider: network, timeout, rate limit or a server-side error."""
+    try:
+        import openai
+    except Exception:
+        return False
+    return isinstance(e, (openai.APIConnectionError, openai.RateLimitError, openai.InternalServerError))
+
+
+def ai_chat_ex(cfg, messages, max_tokens=300, timeout=20.0):
+    """(reply, 'Provider model') from the chosen provider. With 'ai_fallback' on, a network, rate-limit or
+    server failure moves on to the other providers that have a key, so the radio keeps working. A failure
+    carries .ai_provider (the provider that failed last) so the spoken explanation names the right one."""
+    primary = ai_provider(cfg)
+    order = [primary]
+    if cfg.get("ai_fallback", True):
+        order += [p for p in AI_PROVIDERS if p != primary and ai_key(cfg, p)]
+    for i, p in enumerate(order):
+        try:
+            return openai_chat(ai_key(cfg, p), ai_model(cfg, p), messages, max_tokens=max_tokens,
+                               timeout=timeout, provider=p), ai_label(cfg, p)
+        except Exception as e:
+            try:
+                e.ai_provider = p
+            except Exception:
+                pass
+            if i == len(order) - 1 or not _ai_transient(e):
+                raise
+
+
+def ai_chat(cfg, messages, max_tokens=300, timeout=20.0):
+    return ai_chat_ex(cfg, messages, max_tokens, timeout)[0]
+
+
+def openai_problem(e, provider="openai"):
+    """A short spoken explanation of an AI failure (the key test strips ' Check it in Settings.')."""
     if isinstance(e, OpenAIReplyError):
         return str(e)
+    provider = getattr(e, "ai_provider", None) or provider
+    name = (AI_PROVIDERS.get(provider) or AI_PROVIDERS["openai"])["name"]
     msg = str(e).lower()
     if isinstance(e, ValueError) and "api key" in msg:
-        return "There's no OpenAI API key. Check it in Settings."
+        return f"There's no {name} API key. Check it in Settings."
     try:
         import openai
     except Exception:
         return "The OpenAI package isn't installed. Run the setup again."
     if isinstance(e, openai.AuthenticationError):
-        return "OpenAI didn't accept the API key. Check it in Settings."
+        return f"{name} didn't accept the API key. Check it in Settings."
     if isinstance(e, openai.PermissionDeniedError):
-        return "OpenAI refused access for this key. Check the key and model in Settings."
+        return f"{name} refused access for this key. Check the key and model in Settings."
     if isinstance(e, openai.NotFoundError):
-        return "OpenAI couldn't find that model. Check it in Settings."
+        return f"{name} couldn't find that model. Check it in Settings."
     if isinstance(e, openai.RateLimitError):
-        if "quota" in msg or "billing" in msg:
-            return "The OpenAI account is out of credit. Top it up, then try again."
-        return "OpenAI is rate limiting us. Give it a few seconds."
+        if "quota" in msg or "billing" in msg or "balance" in msg:
+            return f"The {name} account is out of credit. Top it up, then try again."
+        return f"{name} is rate limiting us. Give it a few seconds."
+    if isinstance(e, openai.APIStatusError) and getattr(e, "status_code", None) == 402:
+        return f"The {name} account is out of credit. Top it up, then try again."
     if isinstance(e, openai.APIConnectionError):
-        return "Can't reach OpenAI right now. Check the internet connection."
+        return f"Can't reach {name} right now. Check the internet connection."
     if isinstance(e, openai.BadRequestError):
-        return "OpenAI rejected the request. Check the model in Settings."
-    return "The radio link to OpenAI dropped. Try again in a moment."
+        if provider == "gemini" and "api key" in msg:
+            return f"{name} didn't accept the API key. Check it in Settings."
+        return f"{name} rejected the request. Check the model in Settings."
+    return f"The radio link to {name} dropped. Try again in a moment."
 
 
 _RE_SETUP_LABEL = re.compile(
@@ -8254,8 +8352,10 @@ class SetupApplier:
             cls._csp_seq = even
             comp = 1 if st["tyre_compound"] == "wet" else 0
             pr = st["press_psi"]
-            payload = struct.pack("<iiifffffiiiii", 1, odd, float(st["fuel_load"]), comp,
-                                  pr[0], pr[1], pr[2], pr[3], float(st["brake_bias_pct"]),
+            # Same layout as the Lua reader: version, seq, fuel, tyreCompound, 4 pressures, brakeBias, wing,
+            # arbFront, arbRear, tc, abs.
+            payload = struct.pack("<iififffffiiiii", 1, odd, float(st["fuel_load"]), comp,
+                                  float(pr[0]), float(pr[1]), float(pr[2]), float(pr[3]), float(st["brake_bias_pct"]),
                                   int(st["rear_wing"]), int(st["arb_front"]), int(st["arb_rear"]),
                                   int(st["tc"]), int(st["abs"]))
             ctypes.memmove(ptr, payload, len(payload))
@@ -8394,8 +8494,7 @@ class Conversation:
         now = time.monotonic()
         if not self.coach.live():
             self.voice.on_straight.set()
-        key = (self.cfg.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
-               or DEFAULT_CONFIG["openai_api_key"] or "").strip()
+        key = ai_key(self.cfg)
         tl = text.lower()
         if (self._RE_SETUP.search(tl) and key and not self._RE_SHEET.search(tl)
                 and not self._RE_SHEET_CLOSE.search(tl) and not self._RE_SETUP_APPLY.search(tl)):
@@ -8405,7 +8504,7 @@ class Conversation:
         if reply is not None:
             if reply:
                 self.voice.say(reply, now, "answer")
-                self.overlay.post(tip=reply, rc_t=now, rc_reply=reply, rc_ai="Instant command (no OpenAI call)")
+                self.overlay.post(tip=reply, rc_t=now, rc_reply=reply, rc_ai="Instant command (no AI call)")
             return
         threading.Thread(target=self._ask_openai, args=(text,), daemon=True, name="openai-chat").start()
 
@@ -8650,15 +8749,15 @@ class Conversation:
         return None
 
     def _ask_openai(self, text):
-        key = (self.cfg.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
-               or DEFAULT_CONFIG["openai_api_key"] or "").strip()
+        prov = ai_provider(self.cfg)
+        name = AI_PROVIDERS[prov]["name"]
         now = time.monotonic
-        if not key:
-            msg = "I can't chat yet. Add your OpenAI API key in Settings."
+        if not ai_key(self.cfg):
+            msg = f"I can't chat yet. Add your {name} API key in Settings."
             self.voice.say(msg, now(), "answer")
-            self.overlay.post(rc_t=now(), rc_reply=msg, rc_ai_fail="No OpenAI API key")
+            self.overlay.post(rc_t=now(), rc_reply=msg, rc_ai_fail=f"No {name} API key")
             return
-        model = self.cfg.get("openai_model") or DEFAULT_CONFIG["openai_model"]
+        model = ai_model(self.cfg)
         self.overlay.post(rc_t=now(), rc_thinking=model)
         t0 = now()
         with self._lock:
@@ -8668,28 +8767,29 @@ class Conversation:
         data = json.dumps(self.coach.summary(), separators=(",", ":"))
         messages.append({"role": "user", "content": f"SESSION DATA: {data}\n\nDRIVER SAYS: {text}"})
         try:
-            reply = openai_chat(key, model, messages)
+            reply, who = ai_chat_ex(self.cfg, messages)
             reply = reply.replace("*", "").replace("`", "").replace("#", "").strip() or "Say again, I didn't catch that."
             with self._lock:
                 self.history = (self.history + [("user", text), ("assistant", reply)])[-12:]
-            self.overlay.post(rc_t=now(), rc_reply=reply, rc_ai=f"OpenAI {model} · {now() - t0:.1f} s")
+            self.overlay.post(rc_t=now(), rc_reply=reply, rc_ai=f"{who} · {now() - t0:.1f} s")
         except Exception as e:
-            reply = openai_problem(e)
-            self.log(f"OpenAI error: {type(e).__name__}: {e}")
+            reply = openai_problem(e, prov)
+            failed = AI_PROVIDERS.get(getattr(e, "ai_provider", prov), AI_PROVIDERS[prov])["name"]
+            self.log(f"{failed} error: {type(e).__name__}: {e}")
             self.overlay.post(rc_t=now(), rc_reply=reply, rc_ai_fail=reply)
         self.voice.say(reply, now(), "answer")
         self.overlay.post(tip=reply)
 
     def _ask_openai_setup(self, text):
-        """Collaborative Strategist + Coach race setup recommendation powered by OpenAI."""
+        """Collaborative Strategist + Coach race setup recommendation powered by the chosen AI."""
         now = time.monotonic
-        model = self.cfg.get("openai_model") or DEFAULT_CONFIG["openai_model"]
+        model = ai_model(self.cfg)
         self.overlay.post(rc_t=now(), rc_thinking=f"{model} (Strategist + Coach setup)")
         t0 = now()
         s_line, c_line = self.coach.collaborate_race_setup(
             self.coach.last_frame, t0, speak=False, use_openai=True, user_query=text
         )
-        src = (self.coach.last_setup_briefing or {}).get("source", f"OpenAI {model}")
+        src = (self.coach.last_setup_briefing or {}).get("source", ai_label(self.cfg))
         combined = f"Strategist: {s_line}  |  Coach: {c_line}"
         with self._lock:
             self.history = (self.history + [("user", text), ("assistant", combined)])[-12:]
@@ -9231,7 +9331,7 @@ class App:
         self._last_table_rev = None
 
         r = self.root = tk.Tk()
-        r.title("SimCoach")
+        r.title(f"SimCoach {APP_VERSION}")
         sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
         ww, wh = min(1240, max(800, sw - 40)), min(900, max(560, sh - 90))
         r.geometry(f"{ww}x{wh}")
@@ -9447,7 +9547,8 @@ class App:
         title = ttk.Frame(top, style="Bar.TFrame")
         title.pack(side="left")
         ttk.Label(title, text="SimCoach", style="H.TLabel").pack(anchor="w")
-        ttk.Label(title, text="Race coach  ·  engineer  ·  strategist  ·  spotter", style="BgMut.TLabel").pack(anchor="w")
+        ttk.Label(title, text=f"Race coach  ·  engineer  ·  strategist  ·  spotter  ·  v{APP_VERSION}",
+                  style="BgMut.TLabel").pack(anchor="w")
         pill = ttk.Frame(top, style="Pill.TFrame", padding=(10, 5))
         pill.pack(side="left", padx=(22, 0))
         self.dot = tk.Canvas(pill, width=10, height=10, bg=C["panel2"], highlightthickness=0)
@@ -9568,9 +9669,7 @@ class App:
         self.rc_meter.pack(anchor="w", pady=(6, 0))
         self.rc_bar = self.rc_meter.create_rectangle(0, 0, 0, 14, fill=C["good"], outline="")
         self.rc_info["ptt"].configure(text=self.controls.describe("ptt") + "\nor F8 / the button below")
-        has_key = bool(self.cfg.get("openai_api_key") or os.environ.get("OPENAI_API_KEY") or DEFAULT_CONFIG["openai_api_key"])
-        self.rc_info["ai"].configure(text=(self.cfg.get("openai_model") or DEFAULT_CONFIG["openai_model"]) if has_key else
-                                     "No OpenAI key yet: commands work, questions need a key (Settings)")
+        self.rc_info["ai"].configure(text=self._ai_status())
 
         chat = self._card(t, fill="both", expand=True, pady=8)
         top = ttk.Frame(chat, style="Card.TFrame")
@@ -9662,7 +9761,7 @@ class App:
             self._rc_line("You", kw["rc_heard"], "you", kw.get("rc_stt", ""))
             self._rc_set("ai", "busy", "Thinking…")
         if "rc_thinking" in kw:
-            self._rc_set("ai", "busy", f"Asking OpenAI {kw['rc_thinking']}…")
+            self._rc_set("ai", "busy", f"Asking {AI_PROVIDERS[ai_provider(self.cfg)]['name']} {kw['rc_thinking']}…")
         if "rc_reply" in kw:
             fail = kw.get("rc_ai_fail")
             self._rc_set("ai", "bad" if fail else "ok", (fail or kw.get("rc_ai", "")) + ("" if fail else " ✓"))
@@ -9754,24 +9853,45 @@ class App:
         ttk.Button(b, text="Refresh devices", command=self.refresh_devices).pack(side="left", padx=8)
 
         cv = self._card(left, fill="x")
-        ttk.Label(cv, text="Conversation (OpenAI)", style="Sec.TLabel").pack(anchor="w", pady=(0, 6))
+        ttk.Label(cv, text="Conversation (AI)", style="Sec.TLabel").pack(anchor="w", pady=(0, 6))
         cg_ai = grid_rows(cv)
-        kf = ttk.Frame(cg_ai, style="Card.TFrame")
-        self.vars["openai_api_key"] = tk.StringVar(value=self.cfg.get("openai_api_key") or DEFAULT_CONFIG["openai_api_key"])
-        self.key_entry = ttk.Entry(kf, textvariable=self.vars["openai_api_key"], width=30, show="•")
-        self.key_entry.pack(side="left")
-        ttk.Button(kf, text="Show", style="Small.TButton", command=lambda: self.key_entry.configure(
-            show="" if self.key_entry.cget("show") else "•")).pack(side="left", padx=6)
-        row(cg_ai, 0, "OpenAI API key", kf)
-        self.vars["openai_model"] = tk.StringVar(value=self.cfg.get("openai_model") or DEFAULT_CONFIG["openai_model"])
-        row(cg_ai, 1, "OpenAI model", ttk.Combobox(cg_ai, textvariable=self.vars["openai_model"],
-                                                   values=OPENAI_MODELS, width=28))
+        self.vars["ai_provider"] = tk.StringVar(value=AI_PROVIDERS[ai_provider(self.cfg)]["label"])
+        prov_combo = ttk.Combobox(cg_ai, textvariable=self.vars["ai_provider"], values=_AI_LABELS, state="readonly",
+                                  width=28)
+        row(cg_ai, 0, "AI provider", prov_combo, "answers, banter & setups")
+        self.key_entries = {}
+        for i, (pid, spec) in enumerate(AI_PROVIDERS.items(), start=1):
+            kf = ttk.Frame(cg_ai, style="Card.TFrame")
+            self.vars[f"{pid}_api_key"] = tk.StringVar(value=self.cfg.get(f"{pid}_api_key") or "")
+            ent = ttk.Entry(kf, textvariable=self.vars[f"{pid}_api_key"], width=30, show="•")
+            ent.pack(side="left")
+            ttk.Button(kf, text="Show", style="Small.TButton", command=lambda e=ent: e.configure(
+                show="" if e.cget("show") else "•")).pack(side="left", padx=6)
+            self.key_entries[pid] = ent
+            row(cg_ai, i, f"{spec['name']} API key", kf, "also used for online speech" if pid == "openai" else "")
+            self.vars[f"{pid}_model"] = tk.StringVar(value=ai_model(self.cfg, pid))
+        self.key_entry = self.key_entries["openai"]
+        self.model_combo = ttk.Combobox(cg_ai, width=28)
+        row(cg_ai, len(AI_PROVIDERS) + 1, "Model", self.model_combo)
+
+        def on_provider(_e=None):
+            pid = _AI_BY_LABEL.get(self.vars["ai_provider"].get(), "openai")
+            self.model_combo.configure(textvariable=self.vars[f"{pid}_model"], values=AI_PROVIDERS[pid]["models"])
+            self.model_combo.set(self.vars[f"{pid}_model"].get())
+            if hasattr(self, "key_lbl"):
+                self.key_lbl.configure(text="")
+        prov_combo.bind("<<ComboboxSelected>>", on_provider)
+        self.vars["ai_fallback"] = tk.BooleanVar(value=bool(self.cfg.get("ai_fallback", True)))
+        ttk.Checkbutton(cv, text="If the provider is down or busy, try my other keys", variable=self.vars["ai_fallback"]
+                        ).pack(anchor="w", pady=(6, 0))
         kb = ttk.Frame(cv, style="Card.TFrame")
         kb.pack(fill="x", pady=(8, 0))
-        ttk.Button(kb, text="Get an API key", command=lambda: self._open("https://platform.openai.com/api-keys")).pack(side="left")
+        ttk.Button(kb, text="Get an API key", command=lambda: self._open(
+            AI_PROVIDERS[_AI_BY_LABEL.get(self.vars["ai_provider"].get(), "openai")]["key_url"])).pack(side="left")
         ttk.Button(kb, text="Test key", command=self.test_key).pack(side="left", padx=8)
         self.key_lbl = ttk.Label(kb, text="", style="Mut.TLabel", wraplength=300)
         self.key_lbl.pack(side="left")
+        on_provider()
 
         w = self._card(right, fill="x", pady=(0, 8))
         ttk.Label(w, text="Wheel buttons", style="Sec.TLabel").pack(anchor="w", pady=(0, 6))
@@ -10194,10 +10314,15 @@ class App:
             if crew.on(role):
                 self.voice.say(lines[role], now, "urgent", voice=crew.voice_for(role), who=role.upper())
 
+    def _ai_status(self):
+        if ai_key(self.cfg):
+            return ai_label(self.cfg)
+        return f"No {AI_PROVIDERS[ai_provider(self.cfg)]['name']} key yet: commands work, questions need a key (Settings)"
+
     def test_key(self):
-        key = (self.vars["openai_api_key"].get().strip() or os.environ.get("OPENAI_API_KEY")
-               or DEFAULT_CONFIG["openai_api_key"] or "").strip()
-        model = (self.vars["openai_model"].get() or DEFAULT_CONFIG["openai_model"]).strip()
+        pid = _AI_BY_LABEL.get(self.vars["ai_provider"].get(), "openai")
+        key = (self.vars[f"{pid}_api_key"].get().strip() or os.environ.get(AI_PROVIDERS[pid]["env"]) or "").strip()
+        model = (self.vars[f"{pid}_model"].get() or DEFAULT_CONFIG[f"{pid}_model"]).strip()
         if not key:
             self.key_lbl.configure(text="Paste a key first.")
             return
@@ -10205,12 +10330,13 @@ class App:
 
         def work():
             try:
-                reply = openai_chat(key, model, [{"role": "user", "content": "Reply with the word OK."}], max_tokens=16)
+                reply = openai_chat(key, model, [{"role": "user", "content": "Reply with the word OK."}], max_tokens=16,
+                                    provider=pid)
                 self.post(keytest=f"Key works with {model} ✓" if reply else "Connected, but the model sent no reply")
             except Exception as e:
                 self.log(f"Key test failed: {type(e).__name__}: {e}")
-                self.post(keytest=openai_problem(e).replace(" Check it in Settings.", ""))
-        threading.Thread(target=work, daemon=True, name="test-openai-key").start()
+                self.post(keytest=openai_problem(e, pid).replace(" Check it in Settings.", ""))
+        threading.Thread(target=work, daemon=True, name="test-ai-key").start()
 
     def refresh_devices(self):
         def work():
@@ -10294,8 +10420,11 @@ class App:
         self.cfg["udp_share_simhub"] = bool(v["udp_share_simhub"].get())
         _UDPPort.share = self.cfg["udp_share_simhub"]
         self.cfg["whisper_model"] = _WHISPER_BY_LABEL.get(v["whisper_model"].get(), "small.en")
-        self.cfg["openai_api_key"] = v["openai_api_key"].get().strip() or DEFAULT_CONFIG["openai_api_key"]
-        self.cfg["openai_model"] = (v["openai_model"].get() or DEFAULT_CONFIG["openai_model"]).strip()
+        self.cfg["ai_provider"] = _AI_BY_LABEL.get(v["ai_provider"].get(), "openai")
+        self.cfg["ai_fallback"] = bool(v["ai_fallback"].get())
+        for pid in AI_PROVIDERS:
+            self.cfg[f"{pid}_api_key"] = v[f"{pid}_api_key"].get().strip() or DEFAULT_CONFIG[f"{pid}_api_key"]
+            self.cfg[f"{pid}_model"] = (v[f"{pid}_model"].get() or DEFAULT_CONFIG[f"{pid}_model"]).strip()
         old_f1_port = self.cfg.get("f1_port", 20777)
         try:
             p_f1 = int(v["f1_port"].get())
@@ -10315,11 +10444,7 @@ class App:
         if (self.cfg.get("audio_out"), self.cfg.get("volume")) != old_audio:
             self.voice.reconfigure()
         if hasattr(self, "rc_info"):
-            has_key = bool(self.cfg.get("openai_api_key") or os.environ.get("OPENAI_API_KEY") or DEFAULT_CONFIG["openai_api_key"])
-            self.rc_info["ai"].configure(
-                text=(self.cfg.get("openai_model") or DEFAULT_CONFIG["openai_model"]) if has_key else
-                "No OpenAI key yet: commands work, questions need a key (Settings)"
-            )
+            self.rc_info["ai"].configure(text=self._ai_status())
             self.rc_info["ptt"].configure(text=self.controls.describe("ptt") + "\nor F8 / the button below")
         if not quiet:
             self.saved_lbl.configure(text="Saved.")
@@ -10406,7 +10531,7 @@ class App:
         tk = self.tk
         w = self.overlay_win = tk.Toplevel(self.root)
         w.title("SimCoach overlay")
-        w.protocol("WM_DELETE_WINDOW", self.quit)
+        w.protocol("WM_DELETE_WINDOW", self._ov_close)
         w.overrideredirect(True)
         w.attributes("-topmost", True)
         w.configure(bg=self.OV_KEY)
@@ -10710,14 +10835,19 @@ class App:
         self.cfg["overlay_pos"] = [self.overlay_win.winfo_x(), self.overlay_win.winfo_y()]
         save_config(self.cfg)
 
+    def _ov_reset_pos(self):
+        # winfo_x/y still report the old place until Tk redraws, so save the new spot directly.
+        self.overlay_win.geometry("+40+40")
+        self.cfg["overlay_pos"] = [40, 40]
+        save_config(self.cfg)
+
     def _ov_menu(self, e):
         tk = self.tk
         m = tk.Menu(self.overlay_win, tearoff=0, bg=C["panel2"], fg=C["fg"], activebackground=C["acc"],
                     activeforeground="#ffffff", bd=0)
         on = bool(self.cfg.get("overlay_pedals", True))
         m.add_command(label=("Hide" if on else "Show") + " pedal gauges", command=self._ov_toggle_pedals)
-        m.add_command(label="Reset position", command=lambda: (self.overlay_win.geometry("+40+40"),
-                                                                self._ov_drag_end(None)))
+        m.add_command(label="Reset position", command=self._ov_reset_pos)
         if sys.platform == "win32":
             m.add_command(label="Lock (clicks go through to the game)", command=self.toggle_overlay_lock)
         m.add_separator()
@@ -11450,7 +11580,8 @@ def first_run_setup():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="SimCoach live voice coach")
+    ap = argparse.ArgumentParser(description=f"SimCoach {APP_VERSION} live voice coach")
+    ap.add_argument("--version", action="version", version=f"SimCoach {APP_VERSION}")
     ap.add_argument("--bind", metavar="ACTION", nargs="?", const="ptt",
                     help="bind a wheel button: ptt, repeat, mute or tones (default ptt)")
     ap.add_argument("--no-overlay", action="store_true")
@@ -11470,7 +11601,7 @@ def main():
     if not a.test:
         install_crash_logging()
         save_config(cfg)
-        file_log(f"SimCoach starting (Python {sys.version.split()[0]})")
+        file_log(f"SimCoach {APP_VERSION} starting (Python {sys.version.split()[0]})")
 
     if a.bind:
         bind_button(cfg, a.bind)
