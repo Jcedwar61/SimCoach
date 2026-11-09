@@ -14,4 +14,6 @@
 * **Choose your AI:** OpenAI, Google Gemini or DeepSeek for Q&A, crew banter and setup briefings, with automatic fallback to your other keys if one is down.
 * **Fixed:** live setup changes in Assetto Corsa (CSP) now apply; the overlay's *Reset position* saves correctly; closing the overlay no longer quits the app.
 * **Track limits** calls now say how many strikes you have.
+* **Friendlier first run:** SimCoach asks what the crew should call you, and crew radio starts clean (swearing is opt-in in Settings).
+* **Coach personalities** are now named by style: Apex, Rotation, Composed, Feel, Exit and Data. Switch on the radio with e.g. "data coach".
 * **Installer:** downloads uv straight from its official GitHub release instead of running a remote script, and the app shows its version in the title bar.
