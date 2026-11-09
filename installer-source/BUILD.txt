@@ -1,0 +1,11 @@
+SimCoach-Setup.exe source
+=========================
+main.go / files.go         the installer (Go). It embeds everything in a "payload" folder next to it.
+install.ps1, uninstall.ps1 the setup steps the installer runs / registers (put them in payload\).
+rsrc_windows_amd64.syso    icon, version (6.2) and "no admin rights" manifest, linked in automatically.
+
+To rebuild (Go 1.22+):
+  1. Make a "payload" folder here containing: install.ps1, uninstall.ps1, sim_coach.py, README.txt,
+     SimCoach.exe, SimCoach.ico, SimCoach.bat, run_coach.bat, bind_push_to_talk.bat
+  2. set GOOS=windows& set GOARCH=amd64& go build -trimpath -ldflags "-H windowsgui -s -w" -o SimCoach-Setup.exe .
+Run "SimCoach-Setup.exe --silent" to install without any dialogs.
