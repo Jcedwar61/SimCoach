@@ -23,8 +23,11 @@ Quick start & installation (Windows 10 / 11)
 Supported sims (detected automatically)
 ---------------------------------------
   Assetto Corsa, Assetto Corsa Competizione (ACC), AC Rally, AC EVO*, Le Mans Ultimate (LMU),
-  rFactor 2, Automobilista 2 (AMS2), RaceRoom, EA SPORTS WRC, F1 25, DiRT Rally 2.0
+  rFactor 2, Automobilista 2 (AMS2), RaceRoom, iRacing**, EA SPORTS WRC, F1 25, DiRT Rally 2.0
   (* AC EVO's telemetry layout is only partly documented by Kunos.)
+  (** iRacing: coaching, laps, fuel, gaps, flags and the crew work. iRacing doesn't share other cars'
+   positions or live tyre data, so SimCoach's spotter and tyre calls are off there (iRacing has its own
+   spotter), and one-click setup apply doesn't write iRacing setup files.)
 
   Not supported (no public telemetry feed): NASCAR 25, NASCAR Heat 5, Project Motor Racing,
   WRC Generations, KartKraft, BeamNG.drive, CarX Street. If one of these is running, SimCoach tells you
@@ -64,7 +67,8 @@ What's new (latest updates)
       Documents\SimCoach Reports\Setups) and pushes live values over the CSP link in Assetto Corsa.
     * Click a ticked box again to revert that specific change back to baseline in the sim, or click
       "Apply all" / "Revert all" in the footer (or say "apply the setup" on the radio) to apply every
-      change at once.
+      change at once. "Apply all" first lists every value it will change (before -> after) and asks you
+      to confirm; ticking one box shows what it changed; the radio reply says what was applied.
     * Never pops up while driving: if requested on track, it waits until you stop in the pits or on the
       grid, stays on top without stealing keyboard focus from your sim, and remembers its screen position.
     * Every setup sheet is also saved as a text file in Documents\SimCoach Reports, listed in the Reports
@@ -99,6 +103,8 @@ On track: live coaching & voice commands
     coaching on the very next lap. If lap one has an off-track excursion, SimCoach still maps a provisional
     reference so coaching starts immediately, then swaps in your first clean lap.
   - Braking countdown: three tones (beep, beep, BEEP) timed to your reference braking point.
+  - Race starts: a short reminder when you're sitting on the grid, then a start review after turn one
+    (wheelspin, bogging down or lifting, 0-100 km/h time, and places gained or lost). Standing starts only.
   - Focus cues & corner-exit feedback: pre-loaded voice cues before your two biggest time-loss corners and
     immediate biomechanical diagnosis on corner exit, followed by a concise end-of-lap debrief.
   - F1 flashbacks & invalid laps: rewinding with a flashback wipes telemetry and off-track markers from the
@@ -110,6 +116,9 @@ On track: live coaching & voice commands
     * Strategy & car status: "how much fuel", "how much fuel do I need", "how much energy", "should I pit",
       "how are my tyres", "damage check", "engine temps", "cars around me", "who's ahead", "who's behind"
     * Setup: "suggest a setup", "apply the setup", "show the setup sheet", "close the setup sheet"
+    * Practice drills: "work on turn 3 for five laps" (or "practise turn 7"; default 5 laps). The coach talks
+      only about that corner, scores it every lap against your best there, sums up before vs during at the
+      end and adds a table to the report. "Stop the drill" ends it early. Practice and qualifying only.
     * Audio & display controls: "be quiet", "normal coaching", "talk more", "braking tones on / off / every
       corner", "split deltas on / off", "start capture", "stop capture"
     * Open questions ("where am I losing time?", "how do I fix understeer in Turn 3?"): answered using your
@@ -165,6 +174,10 @@ Tabs & settings
     * Coaching: talk level (Quiet / Normal / Chatty), Coach personality (Apex all-round pro, Rotation,
       Composed, Feel, Exit, or Data; say e.g. "data coach" or "switch to composed style" on the radio),
       braking tones, split deltas, auto-start, F1 UDP port, and SimHub port sharing.
+    * Phone / tablet screen (off by default): tick it and open the address shown under it on a phone or
+      tablet on the same Wi-Fi for a big live delta, lap times, position, gaps, fuel and the coach's last
+      call. Read-only: nothing on the page can change SimCoach. Windows may ask once to allow SimCoach
+      on private networks. Crew banter never holds up urgent calls: an urgent call cuts it short.
     * Conversation (AI): pick the AI provider (OpenAI, Google Gemini or DeepSeek), paste its API key and
       click "Test key". Keys are stored locally in %APPDATA%\SimCoach\config.json (or set the
       OPENAI_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY environment variable). With "try my other keys"
