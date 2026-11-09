@@ -7,8 +7,9 @@ Quick start & installation (Windows 10 / 11)
     * Installs for your Windows account only (no admin rights needed) into %LOCALAPPDATA%\Programs\SimCoach,
       adds SimCoach (with its own icon) to the desktop and Start menu, and registers an Uninstall entry
       under Settings > Apps > Installed apps.
-    * The setup window downloads uv (the Python runner), Python 3.12, SimCoach's packages, and offline
-      speech recognition (about 1 GB, a few minutes) so the first launch opens straight away.
+    * The setup window downloads uv (the Python runner, from github.com/astral-sh/uv), Python 3.12,
+      SimCoach's packages, and offline speech recognition (about 1 GB, a few minutes) so the first launch
+      opens straight away.
     * Because the installer isn't code-signed, Windows SmartScreen may show "Windows protected your PC":
       click "More info", then "Run anyway".
     * Updating: run a newer SimCoach-Setup.exe over the top (it closes any running SimCoach first and saves

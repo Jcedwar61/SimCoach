@@ -76,13 +76,18 @@ try {
     Step 1 'Python runner (uv)'
     $uv = Find-UV
     if (-not $uv) {
-        Note 'installing uv from astral.sh ...'
+        Note 'downloading uv from github.com/astral-sh/uv ...'
         try {
-            # in its own PowerShell: an `exit` inside astral's script can't end this setup early
-            $ErrorActionPreference = 'Continue'
-            & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass `
-                -Command "irm https://astral.sh/uv/install.ps1 | iex"
-            if ($LASTEXITCODE) { Warn "uv installer exited with code $LASTEXITCODE" }
+            # uv's official release zip (uv.exe, uvw.exe, uvx.exe), into the folder uv's own installer uses
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+            $bin = Join-Path $env:USERPROFILE '.local\bin'
+            $zip = Join-Path $env:TEMP 'simcoach-uv.zip'
+            $ProgressPreference = 'SilentlyContinue'
+            Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-$arch-pc-windows-msvc.zip" -OutFile $zip
+            New-Item -ItemType Directory -Force -Path $bin | Out-Null
+            Expand-Archive -Force -Path $zip -DestinationPath $bin
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
         } catch {
             Warn "uv download failed: $($_.Exception.Message)"
         } finally {

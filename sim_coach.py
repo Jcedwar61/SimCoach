@@ -67,6 +67,7 @@ except Exception:
     _np = None
 from typing import Optional
 
+APP_VERSION = "6.2"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -9330,7 +9331,7 @@ class App:
         self._last_table_rev = None
 
         r = self.root = tk.Tk()
-        r.title("SimCoach")
+        r.title(f"SimCoach {APP_VERSION}")
         sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
         ww, wh = min(1240, max(800, sw - 40)), min(900, max(560, sh - 90))
         r.geometry(f"{ww}x{wh}")
@@ -9546,7 +9547,8 @@ class App:
         title = ttk.Frame(top, style="Bar.TFrame")
         title.pack(side="left")
         ttk.Label(title, text="SimCoach", style="H.TLabel").pack(anchor="w")
-        ttk.Label(title, text="Race coach  ·  engineer  ·  strategist  ·  spotter", style="BgMut.TLabel").pack(anchor="w")
+        ttk.Label(title, text=f"Race coach  ·  engineer  ·  strategist  ·  spotter  ·  v{APP_VERSION}",
+                  style="BgMut.TLabel").pack(anchor="w")
         pill = ttk.Frame(top, style="Pill.TFrame", padding=(10, 5))
         pill.pack(side="left", padx=(22, 0))
         self.dot = tk.Canvas(pill, width=10, height=10, bg=C["panel2"], highlightthickness=0)
@@ -11578,7 +11580,8 @@ def first_run_setup():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="SimCoach live voice coach")
+    ap = argparse.ArgumentParser(description=f"SimCoach {APP_VERSION} live voice coach")
+    ap.add_argument("--version", action="version", version=f"SimCoach {APP_VERSION}")
     ap.add_argument("--bind", metavar="ACTION", nargs="?", const="ptt",
                     help="bind a wheel button: ptt, repeat, mute or tones (default ptt)")
     ap.add_argument("--no-overlay", action="store_true")
@@ -11598,7 +11601,7 @@ def main():
     if not a.test:
         install_crash_logging()
         save_config(cfg)
-        file_log(f"SimCoach starting (Python {sys.version.split()[0]})")
+        file_log(f"SimCoach {APP_VERSION} starting (Python {sys.version.split()[0]})")
 
     if a.bind:
         bind_button(cfg, a.bind)
