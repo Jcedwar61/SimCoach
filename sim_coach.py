@@ -67,7 +67,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.2"
+APP_VERSION = "6.2.1"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -5731,7 +5731,8 @@ class Coach:
             items = fuel_items + items
 
             strat_line = (
-                f"Strategist pre-race setup for {track}: {fuel_call}, and {tyre_call}. "
+                f"Strategist {'pre-race ' if not (f and f.session in ('practice', 'qualifying')) else ''}"
+                f"setup for {track}: {fuel_call}, and {tyre_call}. "
                 f"Coach, what's the call on chassis and aero?"
             )
 
@@ -5851,7 +5852,10 @@ class Coach:
                 setup_ctx["driver_question"] = user_query
 
             self.last_setup_briefing = {"strategist": strat_line, "coach": coach_line, "source": "built-in"}
-            if race_laps > 0:
+            ses_lbl = f.session.capitalize() if (f and f.session in ("practice", "qualifying")) else None
+            if ses_lbl:
+                race_txt = ses_lbl + (f", {max(1, round(f.time_left / 60))} minutes" if f.time_left else "")
+            elif race_laps > 0:
                 race_txt = f"{'Stage' if (f and f.game in RALLY_GAMES) else 'Race'}, {_say_laps(race_laps)}"
             elif f and f.time_left:
                 race_txt = f"Race, {max(1, round(f.time_left / 60))} minutes"
@@ -5869,7 +5873,7 @@ class Coach:
                 threading.Thread(
                     target=self._openai_setup_worker,
                     args=(api_key, setup_ctx, strat_line, coach_line, now, time.monotonic(),
-                          (self.key, self.session_id), sheet),
+                          (self.key, self.session_id), sheet, show),
                     daemon=True,
                     name="openai-race-setup",
                 ).start()
@@ -5881,7 +5885,7 @@ class Coach:
             return s_ai, c_ai
 
         if speak:
-            self._speak_setup_pair(strat_line, coach_line, now, sheet)
+            self._speak_setup_pair(strat_line, coach_line, now, sheet, force=show)
         else:
             self._publish_setup_sheet(sheet, force=show)
         return strat_line, coach_line
@@ -5932,7 +5936,7 @@ class Coach:
             self.log("Setup sheet ready. It opens when you stop in the pits, or say \"show the setup sheet\".")
         self.overlay.post(setup_sheet=sheet, setup_popup=not moving)
 
-    def _speak_setup_pair(self, strat_line: str, coach_line: str, now: float, sheet=None):
+    def _speak_setup_pair(self, strat_line: str, coach_line: str, now: float, sheet=None, force=False):
         crew = self.crew
         if crew and crew.on("strategist"):
             crew.say("strategist", strat_line, now)
@@ -5941,8 +5945,12 @@ class Coach:
             self.say(strat_line, now, force=True)
             self.say(coach_line, now, force=True)
         self.voice.last_text = f"{strat_line} {coach_line}"
-        self.overlay.post(tip=f"Pre-Race Setup · {coach_line}")
-        self._publish_setup_sheet(sheet)
+        lf0 = self.last_frame
+        self.overlay.post(tip=f"{'Setup' if (lf0 and lf0.session in ('practice', 'qualifying')) else 'Pre-Race Setup'} · {coach_line}")
+        # The session-start sheet opens even on the move (it never takes focus from the game), as long as the
+        # first lap hasn't been completed yet; one that arrives later waits for a stop as before.
+        lf = self.last_frame
+        self._publish_setup_sheet(sheet, force=bool(force and (lf is None or lf.laps_done == 0)))
 
     def _fetch_openai_setup(self, api_key: str, setup_ctx: dict,
                             fallback_strat: str, fallback_coach: str) -> tuple:
@@ -5988,7 +5996,7 @@ class Coach:
             return fallback_strat, fallback_coach, "built-in (fallback)", None
 
     def _openai_setup_worker(self, api_key: str, setup_ctx: dict, fallback_strat: str, fallback_coach: str,
-                             start_now: float, start_mono: float, sess=None, sheet=None):
+                             start_now: float, start_mono: float, sess=None, sheet=None, show=False):
         s_out, c_out, src, ai_items = self._fetch_openai_setup(api_key, setup_ctx, fallback_strat, fallback_coach)
         with self.lock:
             if sess is not None and sess != (self.key, self.session_id):
@@ -5996,7 +6004,8 @@ class Coach:
                 return
             self.last_setup_briefing = {"strategist": s_out, "coach": c_out, "source": src}
         cur_now = start_now + max(0.0, time.monotonic() - start_mono)
-        self._speak_setup_pair(s_out, c_out, cur_now, self._ai_sheet(sheet, s_out, c_out, src, ai_items) if sheet else None)
+        self._speak_setup_pair(s_out, c_out, cur_now, self._ai_sheet(sheet, s_out, c_out, src, ai_items) if sheet else None,
+                               force=show)
 
     def finish_lap(self, lap_time, now):
         lap = self.lap
@@ -7038,16 +7047,17 @@ class Crew:
         fx = self.facts(f)
         track, car = fx["track"], fx["car"]
         self.say("engineer", f"Engineer on the radio. The {car} is ready to go. I'll keep you posted on fuel, tyres and damage.", now)
-        if f.session == "race":
-            if self.coach is not None:
-                self.coach.collaborate_race_setup(f, now, speak=True)
-            else:
-                mins = max(1, round(f.time_left / 60)) if f.time_left else 0
-                length = (_say_laps(f.race_laps) if f.race_laps else
-                          ("1 minute" if mins == 1 else f"{mins} minutes") if f.time_left else "this race")
-                grid = f" You start P{f.position}" + (f" of {f.cars}." if f.cars else ".") if f.position else ""
-                self.say("strategist", f"Strategist here. {length} at {track}.{grid} I'll call positions, gaps and the plan.", now)
-        elif f.session in ("practice", "qualifying"):
+        if self.coach is not None:
+            # Every session type (practice, qualifying, race, hotlap, rally stage): the strategist + coach setup
+            # briefing, and the setup sheet pops up.
+            self.coach.collaborate_race_setup(f, now, speak=True, show=True)
+        elif f.session == "race":
+            mins = max(1, round(f.time_left / 60)) if f.time_left else 0
+            length = (_say_laps(f.race_laps) if f.race_laps else
+                      ("1 minute" if mins == 1 else f"{mins} minutes") if f.time_left else "this race")
+            grid = f" You start P{f.position}" + (f" of {f.cars}." if f.cars else ".") if f.position else ""
+            self.say("strategist", f"Strategist here. {length} at {track}.{grid} I'll call positions, gaps and the plan.", now)
+        if f.session in ("practice", "qualifying"):
             self.say("strategist", f"Strategist here. I'll track your times and position this {f.session}.", now)
         if f.game not in RALLY_GAMES:
             if f.others is not None:
@@ -11348,6 +11358,9 @@ class App:
         cv.pack()
         self._round_rect(cv, 1, 1, W - 1, H - 1, 18, fill=C["bg"], outline=C["line"], width=1)
         cv.create_text(18, 16, text="SIMCOACH", anchor="w", fill=C["mut"], font=self._font(8, True))
+        bx1 = 362                                     # right edge of the delta / tip column, clear of the gauges
+        self._round_rect(cv, bx1 - 62, 6, bx1, 26, 10, fill=C["panel2"], outline=C["line"], tags=("setup_btn",))
+        cv.create_text(bx1 - 31, 16, text="SETUP", fill=C["fg"], font=self._font(8, True), tags=("setup_btn",))
         self.ov_delta = cv.create_text(18, 30, text=self.delta_lbl.cget("text"), anchor="nw",
                                        fill=self.delta_lbl.cget("fg"), font=self._font(30, True))
         tip0 = self.tip_lbl.cget("text")
@@ -11512,12 +11525,21 @@ class App:
 
     def _ov_drag_start(self, e):
         self._ov_drag0 = (e.x_root - self.overlay_win.winfo_x(), e.y_root - self.overlay_win.winfo_y())
+        try:
+            hit = "setup_btn" in self.ov_cv.gettags("current")
+        except Exception:
+            hit = False
+        self._ov_press = (e.x_root, e.y_root) if hit else None
 
     def _ov_drag(self, e):
         dx, dy = getattr(self, "_ov_drag0", (0, 0))
         self.overlay_win.geometry(f"+{e.x_root - dx}+{e.y_root - dy}")
 
-    def _ov_drag_end(self, _e):
+    def _ov_drag_end(self, e):
+        press, self._ov_press = getattr(self, "_ov_press", None), None
+        if press is not None and e is not None and abs(e.x_root - press[0]) + abs(e.y_root - press[1]) < 6:
+            self.post(setup_toggle=True)       # a tap on SETUP (a drag that starts on it still moves the overlay)
+            return
         self.cfg["overlay_pos"] = [self.overlay_win.winfo_x(), self.overlay_win.winfo_y()]
         save_config(self.cfg)
 
@@ -11532,6 +11554,7 @@ class App:
         m = tk.Menu(self.overlay_win, tearoff=0, bg=C["panel2"], fg=C["fg"], activebackground=C["acc"],
                     activeforeground="#ffffff", bd=0)
         on = bool(self.cfg.get("overlay_pedals", True))
+        m.add_command(label="Show / hide setup sheet", command=lambda: self.post(setup_toggle=True))
         m.add_command(label=("Hide" if on else "Show") + " pedal gauges", command=self._ov_toggle_pedals)
         m.add_command(label="Reset position", command=self._ov_reset_pos)
         if sys.platform == "win32":

@@ -69,8 +69,12 @@ What's new (latest updates)
       "Apply all" / "Revert all" in the footer (or say "apply the setup" on the radio) to apply every
       change at once. "Apply all" first lists every value it will change (before -> after) and asks you
       to confirm; ticking one box shows what it changed; the radio reply says what was applied.
-    * Never pops up while driving: if requested on track, it waits until you stop in the pits or on the
-      grid, stays on top without stealing keyboard focus from your sim, and remembers its screen position.
+    * Opens by itself at the start of every session (practice, qualifying, race, hotlap or rally stage),
+      even on a rolling start, together with the strategist and coach briefing. Open or close it any time
+      with the SETUP button on the in-game overlay, the overlay's right-click menu, a wheel button, or by
+      saying "show the setup sheet". A sheet asked for later in a session, while driving, waits until you
+      stop in the pits. It stays on top without stealing keyboard focus from your sim and remembers its
+      screen position.
     * Every setup sheet is also saved as a text file in Documents\SimCoach Reports, listed in the Reports
       tab, and embedded as a table in your HTML Coach Report showing which items were applied in the sim.
   - Virtual energy, engine temperatures & track limits:
