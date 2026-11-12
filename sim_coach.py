@@ -11580,6 +11580,21 @@ def lan_ip():
         s.close()
 
 
+def other_lan_ips():
+    """This PC's other private IPv4 addresses (a second adapter, a VPN): tried when the main one doesn't work."""
+    import ipaddress
+    import socket
+    main, out = lan_ip(), []
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            a = ipaddress.ip_address(ip)
+            if ip != main and a.is_private and not a.is_loopback and not a.is_link_local and ip not in out:
+                out.append(ip)
+    except Exception:
+        pass
+    return out[:3]
+
+
 class SecondScreen:
     """Serves SECOND_SCREEN_HTML and a JSON snapshot. Read-only: nothing on the page can change SimCoach."""
 
@@ -13158,7 +13173,16 @@ class App:
             url = self.screen.url() if self.screen.running() else ""
             for w in (qr, addr, note):
                 w.pack_forget()
-            if url:
+            offline = url.startswith("http://127.")
+            if offline:
+                steps.configure(text="This PC isn't connected to a network, so a phone can't reach it. Connect the PC "
+                                     "to your Wi-Fi or router, then close and reopen this window.")
+                note.configure(text="")
+                onoff.configure(text="Turn off", command=lambda: set_on(False))
+                copy_b.configure(state="disabled")
+                test_b.configure(state="normal", command=lambda: self._open(
+                    f"http://127.0.0.1:{self.screen.port}/{self.screen.token}/"))
+            elif url:
                 steps.configure(text="1.  Connect the phone or tablet to the same Wi-Fi as this PC.\n"
                                      "2.  Scan the code with its camera, or type the address into its browser.\n"
                                      "3.  Start coaching. Tip: add the page to the home screen for full screen.")
@@ -13182,10 +13206,13 @@ class App:
                 addr.insert(0, url)
                 addr.configure(state="readonly")
                 addr.pack(pady=(4, 6), ipady=6)
+                others = [f"http://{ip}:{self.screen.port}/{self.screen.token}/" for ip in other_lan_ips()]
                 note.configure(text="Page doesn't load? The first time, Windows asks to allow SimCoach on private "
                                     "networks: choose Allow. The phone must be on the same Wi-Fi (not mobile data or "
                                     "a guest network). The address is private to you: it stays the same until you "
-                                    "reinstall.")
+                                    "reinstall."
+                                    + (" This PC has more than one network address; if that one doesn't work, try "
+                                       + " or ".join(others) + "." if others else ""))
                 onoff.configure(text="Turn off", command=lambda: set_on(False))
                 copy_b.configure(state="normal", command=lambda: (self.root.clipboard_clear(),
                                                                   self.root.clipboard_append(url)))
