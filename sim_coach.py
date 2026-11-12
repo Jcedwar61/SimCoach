@@ -12294,7 +12294,9 @@ class App:
                           "are added automatically (your own laps are never replaced).").pack(anchor="w", pady=(4, 0))
         self.ref_tv = self._tree(t, [("sim", "Sim"), ("track", "Track"), ("car", "Car"), ("best", "Best lap"),
                                      ("corners", "Corners"), ("source", "Source"), ("saved", "Updated")],
-                                 (110, 260, 240, 90, 70, 80, 140), 14)
+                                 (110, 260, 240, 90, 70, 80, 140), 12)
+        self.starter_lbl = ttk.Label(t, text="", style="Mut.TLabel", wraplength=980, justify="left")
+        self.starter_lbl.pack(anchor="w", pady=(6, 0))
         self.load_refs()
 
     def _ref_files(self):
@@ -12308,6 +12310,14 @@ class App:
         (each is ~100 KB of JSON; re-reading them all on every report blocked the window)."""
         tv = self.ref_tv
         tv.delete(*tv.get_children())
+        try:
+            names = sorted(v[0].replace("the ", "") for v in starter_tracks().values())
+            tuned = sum(1 for k in starter_tracks() if k in benchmarks()["tracks"])
+            self.starter_lbl.configure(
+                text=f"Starter laps (calculated, for every supported sim and any car, used until you set a lap): "
+                     f"{len(names)} circuits, {tuned} tuned to real GT3 lap times. " + ", ".join(names) + ".")
+        except Exception:
+            pass
         cache = self.__dict__.setdefault("_ref_rows", {})
         seen = set()
         for f in self._ref_files():
