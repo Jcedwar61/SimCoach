@@ -7980,7 +7980,7 @@ class Crew:
             return line
 
     def facts(self, f):
-        d = {"driver": self.cfg.get("driver_name") or "the driver", "track": nice_name(f.track), "car": nice_name(f.car),
+        d = {"driver": self.cfg.get("driver_name") or "driver", "track": nice_name(f.track), "car": nice_name(f.car),
              "session": f.session or "session", "game": f.game}
         if f.position:
             d["position"] = f.position
@@ -11721,7 +11721,7 @@ class App:
         r = self.root = tk.Tk()
         r.title(f"SimCoach {APP_VERSION}")
         sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
-        ww, wh = min(1240, max(800, sw - 40)), min(900, max(560, sh - 90))
+        ww, wh = min(1340, max(800, sw - 40)), min(900, max(560, sh - 90))
         r.geometry(f"{ww}x{wh}")
         r.minsize(min(1080, ww), min(820, wh))
         r.configure(bg=C["bg"])
@@ -12096,8 +12096,8 @@ class App:
         ttk.Label(head, text="Radio check", style="Sec.TLabel").pack(anchor="w")
         ttk.Label(head, style="Mut.TLabel", wraplength=1040, justify="left",
                   text="Works without a sim. Hold your push-to-talk (wheel button, F8 or the button below), speak, "
-                       "release. Each step turns green when it works. Try \u201cradio check\u201d (instant, no OpenAI), "
-                       "then a real question like \u201cwhat should I focus on in my first session?\u201d (uses OpenAI).").pack(anchor="w", pady=(4, 0))
+                       "release. Each step turns green when it works. Try \u201cradio check\u201d (instant, no AI key needed), "
+                       "then a real question like \u201cwhat should I focus on in my first session?\u201d (uses your AI provider).").pack(anchor="w", pady=(4, 0))
         steps = self._card(t, fill="x")
         self.rc_dots, self.rc_info = {}, {}
         for col, (k, label) in enumerate(self.RC_STEPS):
@@ -12253,10 +12253,12 @@ class App:
         foot = ttk.Frame(t)
         foot.pack(side="bottom", fill="x", pady=(10, 4))
         cols = self._scroll_area(t)
+        # the right column always gets the width it asks for (its Set / Clear buttons and options must stay in
+        # view); the left one takes the rest, where only the grey hints can run out of room
+        right = ttk.Frame(cols)
+        right.pack(side="right", fill="y")
         left = ttk.Frame(cols)
         left.pack(side="left", fill="both", expand=True, padx=(0, 8))
-        right = ttk.Frame(cols)
-        right.pack(side="left", fill="both", expand=True)
         self.vars = {}
 
         def grid_rows(card):
@@ -12265,7 +12267,7 @@ class App:
             return g
 
         def row(g, r, label, widget, hint=""):
-            ttk.Label(g, text=label, style="Card.TLabel", width=20).grid(row=r, column=0, sticky="w", pady=5)
+            ttk.Label(g, text=label, style="Card.TLabel", width=17).grid(row=r, column=0, sticky="w", pady=5)
             widget.grid(row=r, column=1, sticky="w", pady=5)
             if hint:
                 ttk.Label(g, text=hint, style="Mut.TLabel").grid(row=r, column=2, sticky="w", padx=8)
@@ -12310,7 +12312,7 @@ class App:
         for i, (pid, spec) in enumerate(AI_PROVIDERS.items(), start=1):
             kf = ttk.Frame(cg_ai, style="Card.TFrame")
             self.vars[f"{pid}_api_key"] = tk.StringVar(value=self.cfg.get(f"{pid}_api_key") or "")
-            ent = ttk.Entry(kf, textvariable=self.vars[f"{pid}_api_key"], width=30, show="•")
+            ent = ttk.Entry(kf, textvariable=self.vars[f"{pid}_api_key"], width=24, show="•")
             ent.pack(side="left")
             ttk.Button(kf, text="Show", style="Small.TButton", command=lambda e=ent: e.configure(
                 show="" if e.cget("show") else "•")).pack(side="left", padx=6)
@@ -12345,8 +12347,8 @@ class App:
         wg = grid_rows(w)
         self.bind_lbls = {}
         for r_, (action, label) in enumerate(BUTTON_ACTIONS):
-            ttk.Label(wg, text=label, style="Card.TLabel", width=22).grid(row=r_, column=0, sticky="w", pady=4)
-            lbl = ttk.Label(wg, text=self.controls.describe(action), style="Mut.TLabel", width=38)
+            ttk.Label(wg, text=label, style="Card.TLabel", width=21).grid(row=r_, column=0, sticky="w", pady=4)
+            lbl = ttk.Label(wg, text=self.controls.describe(action), style="Mut.TLabel", width=20)
             lbl.grid(row=r_, column=1, sticky="w")
             self.bind_lbls[action] = lbl
             ttk.Button(wg, text="Set", style="Small.TButton",
@@ -12354,7 +12356,7 @@ class App:
             ttk.Button(wg, text="Clear", style="Small.TButton",
                        command=lambda a=action: self.clear_action(a)).grid(row=r_, column=3)
         ttk.Label(w, text="Click Set, then press the button on your wheel. Works while the game is focused.",
-                  style="Mut.TLabel").pack(anchor="w", pady=(6, 0))
+                  style="Mut.TLabel", wraplength=420, justify="left").pack(anchor="w", pady=(6, 0))
 
         c = self._card(right, fill="x")
         ttk.Label(c, text="Coaching", style="Sec.TLabel").pack(anchor="w", pady=(0, 6))
@@ -12369,7 +12371,7 @@ class App:
             value=_LABEL_BY_PERSONALITY.get(self.cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"]), pnames[0])
         )
         row(cg, 1, "Coach personality",
-            ttk.Combobox(cg, textvariable=self.vars["coach_personality"], values=pnames, state="readonly", width=44))
+            ttk.Combobox(cg, textvariable=self.vars["coach_personality"], values=pnames, state="readonly", width=38))
         bc = ttk.Frame(cg, style="Card.TFrame")
         self.vars["brake_callouts"] = tk.StringVar(value=self.cfg.get("brake_callouts", "focus"))
         for val, txt in (("focus", "Focus corners"), ("all", "Every corner"), ("off", "Off")):
@@ -12392,12 +12394,12 @@ class App:
         ttk.Label(pf, text="F1 25 UDP port", style="Card.TLabel").pack(side="left")
         self.vars["f1_port"] = tk.StringVar(value=str(self.cfg.get("f1_port", 20777)))
         ttk.Entry(pf, textvariable=self.vars["f1_port"], width=8).pack(side="left", padx=8)
-        ttk.Label(pf, text="20778 is always listened to as well (SimHub forwarding)", style="Mut.TLabel").pack(side="left")
+        ttk.Label(pf, text="also listens on 20778 (SimHub)", style="Mut.TLabel").pack(side="left")
         self.vars["udp_share_simhub"] = tk.BooleanVar(value=bool(self.cfg.get("udp_share_simhub", True)))
         ttk.Checkbutton(c, text="Share F1 25 / DiRT Rally 2.0 telemetry with SimHub",
                         variable=self.vars["udp_share_simhub"]).pack(anchor="w", pady=(4, 0))
         self.vars["second_screen"] = tk.BooleanVar(value=bool(self.cfg.get("second_screen")))
-        ttk.Checkbutton(c, text="Phone / tablet live screen (same Wi-Fi; the Phone screen button up top shows how)",
+        ttk.Checkbutton(c, text="Phone / tablet live screen (see the Phone screen button up top)",
                         variable=self.vars["second_screen"]).pack(anchor="w", pady=(4, 0))
         self.screen_lbl = ttk.Label(c, text="", style="Mut.TLabel")
         self.screen_lbl.pack(anchor="w")
@@ -12414,7 +12416,7 @@ class App:
         rc = self._card(right, fill="x", pady=(8, 0))
         ttk.Label(rc, text="Race engineer, strategist & spotter", style="Sec.TLabel").pack(anchor="w", pady=(0, 2))
         ttk.Label(rc, text="They introduce themselves, report after every lap, react and chat, each in their own voice.",
-                  style="Mut.TLabel").pack(anchor="w", pady=(0, 6))
+                  style="Mut.TLabel", wraplength=560, justify="left").pack(anchor="w", pady=(0, 6))
         crg = grid_rows(rc)
         vnames = _VOICE_NAMES
         for r_, (role, label, default_voice) in enumerate(CREW_ROLES):
@@ -12423,7 +12425,7 @@ class App:
             cur = self.cfg.get(f"{role}_voice") or default_voice
             self.vars[f"{role}_voice"] = tk.StringVar(value=_LABEL_BY_VOICE.get(cur, vnames[0]))
             ttk.Combobox(crg, textvariable=self.vars[f"{role}_voice"], values=vnames, state="readonly",
-                         width=24).grid(row=r_, column=1, sticky="w", padx=8, pady=3)
+                         width=19).grid(row=r_, column=1, sticky="w", padx=8, pady=3)
         for r_, (label, key, opts, default) in enumerate((("Lap reports", "crew_updates", CREW_UPDATES, DEFAULT_CONFIG["crew_updates"]),
                                                           ("Chatter", "crew_chatter", CREW_CHATTER, "normal"),
                                                           ("Language", "crew_language", CREW_LANGUAGE, "clean"),
@@ -12432,7 +12434,7 @@ class App:
             self.vars[key] = tk.StringVar(value=dict((v, k) for k, v in opts).get(self.cfg.get(key, default),
                                                                                     dict((v, k) for k, v in opts)[default]))
             ttk.Combobox(crg, textvariable=self.vars[key], values=[k for k, _ in opts], state="readonly",
-                         width=20).grid(row=r_, column=3, sticky="w", pady=3)
+                         width=18).grid(row=r_, column=3, sticky="w", pady=3)
         self.vars["sheet_autopop"] = tk.BooleanVar(value=bool(self.cfg.get("sheet_autopop", True)))
         ttk.Checkbutton(rc, text="Open the setup sheet at the start of each session",
                         variable=self.vars["sheet_autopop"]).pack(anchor="w", pady=(6, 0))
@@ -12584,13 +12586,13 @@ class App:
         ttk.Button(bar, text="View on GitHub", command=self.view_best).pack(side="left", padx=8)
         self.gh_btn = ttk.Button(bar, text="", command=self.github_account)
         self.gh_btn.pack(side="right")
-        self.best_lbl = ttk.Label(t, text="", style="Mut.TLabel", wraplength=900)
+        self.best_lbl = ttk.Label(t, text="", style="BgMut.TLabel", wraplength=1150, justify="left")
         self.best_lbl.pack(anchor="w", pady=(2, 0))
         ttk.Label(t, text=f"Your best lap for every sim, track and car, saved ready to share in {BEST_DIR}. "
                           "Share one to the SimCoach library and every SimCoach driver gets it automatically. "
                           "Shared: sim, track, car and the lap trace (speed, pedals, steering); never your "
-                          "name, settings or keys. Your GitHub username shows on the submission."
-                  ).pack(anchor="w", pady=(4, 0))
+                          "name, settings or keys. Your GitHub username shows on the submission.",
+                  wraplength=1150, justify="left").pack(anchor="w", pady=(4, 0))
         self.best_tv = self._tree(t, [("sim", "Sim"), ("track", "Track"), ("car", "Car"), ("best", "Best lap"),
                                       ("saved", "Set"), ("status", "Library")],
                                   (110, 250, 230, 90, 140, 230), 14)
