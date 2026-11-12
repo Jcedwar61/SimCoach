@@ -28,6 +28,8 @@ The full guide is in [README.txt](README.txt). The library's rules are in [refer
 ### What's new in 6.9.1
 * **Phone screen button:** the phone / tablet live screen was hidden in Settings. A *Phone screen* button at the top of the window now switches it on and shows a QR code to scan, the address, *Copy address* and *Test on this PC*. It also says so when the PC isn't on a network, and lists the PC's other addresses if it has more than one.
 
+* **Starter laps table:** the References tab now lists every circuit with a starter lap (43) with its length, the calculated lap time for GT3, GT4, prototype and F1 cars, and the real target times for each sim, plus the 27 tracks that have target times only.
+
 ### What's new in 6.9
 * **Benchmark lap times for every sim:** 87 quick, repeatable lap times by sim and car class (ACC, iRacing, Le Mans Ultimate, Automobilista 2, rFactor 2, Assetto Corsa and F1) are in the library's [benchmarks](references/benchmarks/laps.json), from setup-shop reference laps, leaderboards and league results. At the start of a session the coach tells you the target for your sim and class ("a quick GT3 lap here is about 2:16.4"), or for your exact car where there is one (e.g. the GTP cars at Montreal). 48 tracks have targets, including ones with no starter lap (Nordschleife, Le Mans, Bathurst, Laguna Seca, Road Atlanta, Long Beach, The Bend and more).
 * **Starter laps tuned to them:** at circuits with a starter lap, the calculated lap is tuned so its lap time matches your sim's benchmark, which moves its corner speeds and braking points toward a real quick lap. Before tuning, the calculated GT3 laps were already within about 4 % of the benchmarks.
