@@ -124,7 +124,8 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, {"object": {"sha": "abc123"}})
         m = re.match(r"/repos/([^/]+/[^/]+)/contents/(.+)\?ref=(.+)$", self.path)
         if m and (m.group(1), m.group(3), m.group(2)) in files:
-            return self.reply(200, {"sha": blob(files[(m.group(1), m.group(3), m.group(2))])})
+            b = files[(m.group(1), m.group(3), m.group(2))]
+            return self.reply(200, {"sha": blob(b), "content": base64.b64encode(b).decode()})
         self.reply(404, {"message": "Not Found"})
 
     def do_PUT(self):
@@ -181,6 +182,14 @@ check(puts and puts[0][1] == f"{FRIEND}/SimCoach" and puts[0][2].startswith("lap
       "file goes to the driver's fork on a new branch, replacing the library's version")
 check(prs and prs[0][1].startswith(f"{FRIEND}:lap-") and prs[0][2] == "main", "pull request into the library")
 check(files[(REPO, "main", path)] == data, "library unchanged until the owner approves")
+
+# a slower lap isn't sent at all
+json.dump(lap(A, t=137.6), open(os.path.join(refs, name), "w"))
+sc.save_best_laps(refs, best)
+calls.clear()
+kind, why = sc.upload_library_lap("tok-friend", name, open(os.path.join(best, name), "rb").read(), "x", log=lambda m: None)
+check(kind == "refused" and "faster" in why and not any(c[0] in ("PUT", "PR") for c in calls),
+      f"slower than the library's lap: not sent ({why})")
 
 # bad token
 try:

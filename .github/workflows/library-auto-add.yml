@@ -1,0 +1,35 @@
+# Adds reference laps shared from SimCoach to the library automatically: every pull request that only adds or
+# changes files in references/ is checked (complete, clean, believable lap, faster than the library's lap) and the
+# good laps are committed straight in; the pull request is closed with a note. Nothing from the pull request runs:
+# the checker comes from main and only reads the submitted files as data.
+name: Library auto-add
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+    paths: ["references/**"]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: library-auto-add
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check and add the shared laps
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/references/review_submission.py

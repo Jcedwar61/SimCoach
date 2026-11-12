@@ -12,7 +12,7 @@
 
 ### What's new in 6.7
 * **Best laps tab:** your best lap for every sim, track and car, saved ready to share (*Documents\SimCoach Reports\Best laps*), with its library status.
-* **Share from the app:** *Share selected* or *Share all new* uploads laps to the SimCoach library. Sign in to GitHub once with a short code (your password never goes through SimCoach). The library owner's laps go straight in; other drivers' laps arrive as a pull request for the owner to approve, then reach everyone automatically.
+* **Share from the app:** *Share selected* or *Share all new* uploads laps to the SimCoach library. Sign in to GitHub once with a short code (your password never goes through SimCoach). Laps are checked and added automatically within a minute or two (clean, believable and faster than the library's lap for that car and track), then reach every SimCoach driver.
 
 ### What's new in 6.6
 * **Library laps import automatically:** new laps shared to the [SimCoach reference library](references/) are added to your References at start-up and every 12 hours (or *References → Update from library*). Library laps that someone improves are updated too; your own laps are never replaced. If a lap arrives for the car and track you're driving, the coach switches to it and tells you.

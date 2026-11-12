@@ -121,8 +121,9 @@ On track: live coaching & voice commands
   - Best laps tab: your best lap for every sim / track / car, kept ready to share in Documents\SimCoach
     Reports\Best laps, with its library status (Not shared / Sent, waiting for approval / In the library).
     Share selected or Share all new uploads them to the library from the app: the first time, sign in to
-    GitHub with the code SimCoach shows. The library owner's laps go straight in; other drivers' laps are
-    sent as a pull request for the owner to approve. Shared: sim, track, car and the lap trace only.
+    GitHub with the code SimCoach shows. Laps are checked and added to the library automatically within a
+    minute or two (only if faster than the library's lap for that car and track). Shared: sim, track, car
+    and the lap trace only.
   - SimCoach reference library: the first time you drive a sim / track / car with no lap of your own, SimCoach
     checks the shared library (the references folder of SimCoach's GitHub repository) for a lap with exactly
     that sim, track and car, and coaches you against it until you beat it. Share your own laps with

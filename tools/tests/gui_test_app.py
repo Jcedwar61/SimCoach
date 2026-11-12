@@ -157,7 +157,9 @@ def run():
         check(os.path.exists(os.path.join(sc.BEST_DIR, LAPNAME)), "and saved in the Best laps folder")
         opened = []
         app._open = lambda t: opened.append(t)
+        cid, sc.GITHUB_CLIENT_ID = sc.GITHUB_CLIENT_ID, ""
         app.share_best([LAPNAME])
+        sc.GITHUB_CLIENT_ID = cid
         check(any("upload/main/references" in str(o) for o in opened) and "Drag" in app.best_lbl.cget("text"),
               "no sign-in set up: GitHub upload page with the file's folder")
         import tkinter.messagebox as mb
@@ -166,12 +168,12 @@ def run():
         sc.upload_library_lap = lambda token, name, data, title, **k: ("proposed", "https://example.invalid/pull/1")
         app.share_best([LAPNAME])
         wait_for(lambda: app.best_tv.exists(LAPNAME) and app.best_tv.set(LAPNAME, "status").startswith("Sent"), 5)
-        check(app.best_tv.set(LAPNAME, "status") == "Sent · waiting for approval", "shared from the app: waiting for approval")
+        check(app.best_tv.set(LAPNAME, "status") == "Sent · being checked", "shared from the app: being checked")
         check(saved.get("shared_laps", {}).get(LAPNAME, {}).get("url") == "https://example.invalid/pull/1",
               "remembered with its link")
         app._lib_index = {LAPNAME: sc.git_blob_sha(open(os.path.join(sc.BEST_DIR, LAPNAME), "rb").read())}
         app.load_best()
-        check(app.best_tv.set(LAPNAME, "status") == "In the library ✓", "approved: in the library")
+        check(app.best_tv.set(LAPNAME, "status") == "In the library ✓", "added: in the library")
         app.vars["second_screen"].set(False)
         app.save_settings(quiet=True)
         pump()

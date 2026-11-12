@@ -10846,8 +10846,8 @@ def sync_library(coach, seen, store_dir=None, timeout=8.0, api=None, log=print):
 # ---- sharing best laps from the app (GitHub sign-in with a one-time code, then a commit or a pull request) ----
 GITHUB_API = "https://api.github.com"
 GITHUB_WEB = "https://github.com"
-# The SimCoach OAuth app's client ID (public, not a secret). Empty: sharing falls back to the GitHub upload page.
-GITHUB_CLIENT_ID = ""
+# The SimCoach OAuth app's client ID (public, not a secret: it only names the app on GitHub's sign-in page).
+GITHUB_CLIENT_ID = "Ov23litlosIIZII412tg"
 BEST_DIR = os.path.join(REPORT_DIR, "Best laps")
 
 
@@ -10906,6 +10906,39 @@ def save_best_laps(ref_dir, best_dir):
         except OSError:
             continue
     return written
+
+
+def library_submission_problem(d, name, current=None):
+    """None if d can go into the shared library as file `name`, else why not. The same rules run in the app
+    (before sending) and on GitHub (tools/references/review_submission.py, before adding it): a complete, clean
+    lap for the sim / track / car in the file name, believable numbers, and faster than the library's lap for
+    that combination (current), if it has one."""
+    prob = ref_problem(d)
+    if prob:
+        return f"not a usable lap ({prob})"
+    if library_file_name(d["key"]) != name:
+        return "the file name doesn't match its sim, track and car"
+    if d.get("provisional") or d.get("source") == "starter":
+        return "not a clean lap"
+    bt = float(d["best_time"])
+    ref = d["ref"]
+    t, spd = ref["t"], ref["speed"]
+    if not 15.0 <= bt <= 1800.0:
+        return "lap time out of range"
+    if not (min(spd) >= 0 and max(spd) <= 500):
+        return "speed trace out of range"
+    if t[0] > 5.0 or not (0.8 * bt <= t[-1] <= bt + 2.0):
+        return "the lap trace doesn't match the lap time"
+    if sum(1 for a, b in zip(t, t[1:]) if b < a - 0.05) > BINS // 100:
+        return "the lap trace runs backwards"
+    if current is not None:
+        try:
+            cur = float(current.get("best_time") or 0)
+        except (TypeError, ValueError):
+            cur = 0
+        if cur > 0 and bt >= cur - 0.0005:
+            return f"the library's lap is faster or equal ({fmt_time(cur).replace(' ', ':')})"
+    return None
 
 
 class GitHubError(Exception):
@@ -10970,7 +11003,8 @@ def github_device_poll(client_id, start, cancelled=lambda: False, sleep=time.sle
 def upload_library_lap(token, name, data, title, repo=None, log=print):
     """Put one lap in the shared library. With write access to the library's repository it's committed straight
     in; otherwise it goes to the driver's own copy (fork) of it and a pull request asks the owner to add it.
-    Returns ("added" | "proposed", web link)."""
+    Proposals are checked and added automatically on GitHub (the same rules as here).
+    Returns ("added" | "proposed", web link) or ("refused", why) when it can't go in (e.g. the library is faster)."""
     import base64
     repo = repo or UPDATE_REPO
     api = GITHUB_API
@@ -10979,13 +11013,24 @@ def upload_library_lap(token, name, data, title, repo=None, log=print):
     base = info.get("default_branch") or "main"
     path = f"references/{name}"
     try:
-        existing = _gh_call("GET", f"{api}/repos/{repo}/contents/{path}?ref={base}", token).get("sha")
+        cur = _gh_call("GET", f"{api}/repos/{repo}/contents/{path}?ref={base}", token)
+        existing = cur.get("sha")
     except GitHubError as e:
         if e.status != 404:
             raise
-        existing = None
+        cur, existing = {}, None
     if existing == git_blob_sha(data):
         return "added", f"{GITHUB_WEB}/{repo}/blob/{base}/{path}"
+    current = None
+    if existing:
+        try:
+            import base64 as _b64
+            current = json.loads(_b64.b64decode(cur.get("content") or "").decode("utf-8"))
+        except Exception:
+            current = None
+    prob = library_submission_problem(json.loads(data.decode("utf-8")), name, current)
+    if prob:
+        return "refused", prob
     put = {"message": title, "content": base64.b64encode(data).decode("ascii")}
     if existing:
         put["sha"] = existing
@@ -11009,8 +11054,8 @@ def upload_library_lap(token, name, data, title, repo=None, log=print):
     _gh_call("PUT", f"{api}/repos/{fork}/contents/{path}", token, put)
     pr = _gh_call("POST", f"{api}/repos/{repo}/pulls", token,
                   {"title": title, "head": f"{me}:{branch}", "base": base,
-                   "body": "Shared from SimCoach's Best laps tab. The file was checked by the app (complete lap, "
-                           "matching sim / track / car, no off-track moments)."})
+                   "body": "Shared from SimCoach's Best laps tab. It's checked and added to the library "
+                           "automatically (tools/references/review_submission.py)."})
     log(f"Proposed {name} for the library: {pr.get('html_url')}")
     return "proposed", pr.get("html_url") or f"{GITHUB_WEB}/{repo}/pulls"
 
@@ -12150,7 +12195,9 @@ class App:
             if idx is not None and idx.get(name) == sha:
                 status = "In the library ✓"
             elif rec.get("sha") == sha and rec.get("status") == "proposed":
-                status = "Sent · waiting for approval"
+                status = rec.get("verdict") or "Sent · being checked"
+            elif rec.get("sha") == sha and rec.get("status") == "refused":
+                status = "Not added: " + str(rec.get("url"))
             elif rec.get("sha") == sha:
                 status = "In the library ✓"
             elif idx is not None and name in idx:
@@ -12171,11 +12218,27 @@ class App:
         if self.cfg.get("shared_refs", True) and time.monotonic() - self._lib_index_t > 600:
             self._lib_index_t = time.monotonic()
 
+            pending = {n: r for n, r in shared.items() if r.get("status") == "proposed" and not r.get("verdict")}
+
             def fetch():
                 try:
-                    self.post(lib_index={it["name"]: it["sha"] for it in list_library()})
+                    idx = {it["name"]: it["sha"] for it in list_library()}
                 except Exception as e:
                     file_log(f"Library list failed: {e}")
+                    return
+                verdicts = {}
+                for n, r in pending.items():         # sent laps the library doesn't have: did the check refuse them?
+                    m = re.search(r"/pull/(\d+)", str(r.get("url")))
+                    if not m or idx.get(n) == r.get("sha"):
+                        continue
+                    try:
+                        pr = _gh_call("GET", f"{GITHUB_API}/repos/{UPDATE_REPO}/pulls/{m.group(1)}",
+                                      self.cfg.get("github_token") or None, timeout=8.0)
+                        if pr.get("state") == "closed":
+                            verdicts[n] = "Not added (View on GitHub says why)"
+                    except Exception:
+                        pass
+                self.post(lib_index=(idx, verdicts))
             threading.Thread(target=fetch, daemon=True, name="library-list").start()
 
     def open_best_folder(self):
@@ -12186,7 +12249,7 @@ class App:
     def view_best(self):
         sel = self.best_tv.selection()
         rec = (self.cfg.get("shared_laps") or {}).get(sel[0]) if sel else None
-        if rec and rec.get("url"):
+        if rec and str(rec.get("url", "")).startswith("http"):
             self._open(rec["url"])
         else:
             self._open(f"{GITHUB_WEB}/{UPDATE_REPO}/tree/main/references")
@@ -12194,10 +12257,10 @@ class App:
     def share_all_best(self):
         self.load_best()
         names = [n for n in self.best_tv.get_children()
-                 if not str(self.best_tv.set(n, "status")).startswith(("In the library", "Sent"))]
+                 if not str(self.best_tv.set(n, "status")).startswith(("In the library", "Sent", "Not added"))]
         if not names:
-            self.best_lbl.configure(text="Nothing new to share: every best lap is in the library or waiting "
-                                         "for approval.")
+            self.best_lbl.configure(text="Nothing new to share: every best lap is in the library, on its way, or "
+                                         "slower than the library's.")
             return
         self.share_best(names)
 
@@ -12239,6 +12302,7 @@ class App:
                     title = f"Best lap: {k[0]} · {k[1]} · {k[2]} · {fmt_time(d.get('best_time') or 0)}"
                     kind, url = upload_library_lap(token, name, data, title, log=self.log)
                     results[name] = {"sha": git_blob_sha(data), "status": kind, "url": url,
+                                     "time": d.get("best_time"),
                                      "when": time.strftime("%Y-%m-%d %H:%M")}
                 except GitHubError as e:
                     errors.append((name, str(e), e.status))
@@ -12260,14 +12324,17 @@ class App:
             self.cfg["github_login"] = ""
             self._gh_label()
         save_config(self.cfg)
+        refused = {n: r for n, r in results.items() if r["status"] == "refused"}
         added = sum(1 for r in results.values() if r["status"] == "added")
-        sent = len(results) - added
+        sent = sum(1 for r in results.values() if r["status"] == "proposed")
         parts = []
         if added:
             parts.append(f"{added} added to the library (everyone gets {'them' if added > 1 else 'it'} at their "
                          f"next library check)")
         if sent:
-            parts.append(f"{sent} sent for approval")
+            parts.append(f"{sent} sent: checked and added to the library automatically in a minute or two")
+        for n, r in refused.items():
+            parts.append(f"{n[:-5].replace('__', ' · ')} not added: {r['url']}")
         for name, msg, st in errors:
             self.log(f"Couldn't share {name}: {msg}")
         if errors:
@@ -13381,7 +13448,13 @@ class App:
             if "best_shared" in merged:
                 self._best_shared(merged["best_shared"])
             if "lib_index" in merged:
-                self._lib_index = merged["lib_index"]
+                self._lib_index, verdicts = merged["lib_index"]
+                if verdicts:
+                    shared = self.cfg.get("shared_laps") or {}
+                    for n, v in verdicts.items():
+                        if n in shared:
+                            shared[n]["verdict"] = v
+                    save_config(self.cfg)
                 self.load_best()
             if "library_sync" in merged:
                 if merged["library_sync"]:
