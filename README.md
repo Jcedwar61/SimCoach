@@ -5,10 +5,25 @@
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 
-* **Install:** Run `SimCoach-Setup.exe` (no admin needed; installs Python 3.12, packages & free offline speech recognition; SmartScreen: *More info > Run anyway*) or `SimCoach.bat`.
-* **Supported Sims:** AC, ACC, AC Rally, AC EVO*, LMU, rF2, AMS2 (*Shared Memory = Project CARS 2*), RaceRoom, **iRacing**, EA WRC, F1 25 (*UDP 20777, 2025*), DiRT Rally 2.0. Shares port 20777 with SimHub.
-* **Live Coaching & Crew:** First clean lap maps corners for braking tones, focus cues & exit diagnosis. Engineer, Strategist & Spotter call fuel, virtual energy, temps, wear, track limits, rain/wetness, flags, gaps, cars alongside & banter.
-* **Setup, Overlay & Voice:** Click-to-apply setup sheet updates setups directly in-sim. Click-through overlay shows delta & pedal traces. Push-to-talk (wheel/F8), ref sharing, HTML reports & optional AI Q&A (OpenAI, Google Gemini or DeepSeek, with automatic fallback).
+### Install
+Run `SimCoach-Setup.exe`. No admin rights needed; it installs Python 3.12, SimCoach's packages and free offline speech recognition. If Windows SmartScreen appears: *More info → Run anyway*. SimCoach tells you when a newer release is out and can install it for you.
+
+### Supported sims
+Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista 2 (*Shared Memory = Project CARS 2*), RaceRoom, iRacing, F1 25 (*UDP 20777, format 2025*), EA WRC and DiRT Rally 2.0. Shares port 20777 with SimHub.
+
+### What it does
+* **Live voice coaching:** braking tones, focus-corner cues and exit diagnosis against your reference lap, with a short debrief each lap. Six coach styles (Apex, Rotation, Composed, Feel, Exit, Data).
+* **Coaching from lap one:** at 43 circuits SimCoach calculates a *starter lap* for your car's class and lines it up with your sim during the first lap, so braking calls start before you've set a time. Your first clean lap replaces it.
+* **Target lap times:** the coach tells you what a quick lap is for your sim and class (or exact car) at 48 tracks, from 87 benchmark times across ACC, iRacing, LMU, AMS2, rFactor 2, AC and F1.
+* **Race crew:** engineer, strategist and spotter call fuel, virtual energy, temperatures, wear, track limits, weather, flags, gaps and cars alongside. Urgent calls cut in ahead of everything else.
+* **Race starts and drills:** a grid reminder and a start review after turn one; say *"work on turn 3 for five laps"* for a focused drill.
+* **Setup help:** a setup briefing and a click-to-apply setup sheet at the start of every session (it shows each change and asks first).
+* **Shared reference library:** laps other drivers share are downloaded automatically for your exact sim, track and car. The **Best laps** tab keeps your own best laps and shares them in one click (free GitHub sign-in); a shared lap is checked and added automatically if it's the fastest for that combination.
+* **Overlay and phone screen:** a click-through overlay with delta and pedal traces, plus an optional live page for a phone or tablet on the same Wi-Fi.
+* **Talk to it:** push-to-talk (wheel button or F8) with offline speech recognition; optional AI answers, banter and setup briefings through OpenAI, Google Gemini or DeepSeek, with automatic fallback.
+* **Reports:** an HTML report after each session.
+
+The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ### What's new in 6.9
 * **Benchmark lap times for every sim:** 87 quick, repeatable lap times by sim and car class (ACC, iRacing, Le Mans Ultimate, Automobilista 2, rFactor 2, Assetto Corsa and F1) are in the library's [benchmarks](references/benchmarks/laps.json), from setup-shop reference laps, leaderboards and league results. At the start of a session the coach tells you the target for your sim and class ("a quick GT3 lap here is about 2:16.4"), or for your exact car where there is one (e.g. the GTP cars at Montreal). 48 tracks have targets, including ones with no starter lap (Nordschleife, Le Mans, Bathurst, Laguna Seca, Road Atlanta, Long Beach, The Bend and more).
