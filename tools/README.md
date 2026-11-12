@@ -29,6 +29,7 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_reference_library | shared library downloads (local stand-in for GitHub) and the coach flow |
 | test_library_review | GitHub-side checker that adds shared laps (faster / slower / broken / mismatched / non-lap PRs) |
 | test_share_laps | Best laps folder, library fingerprint, GitHub code sign-in, owner commit vs fork + pull request (local stand-in) |
+| test_library_tracks | starter-lap track shapes from the library: checks, download, use, removal |
 | test_library_sync | automatic library import: new / changed / unchanged / bad files, own laps kept, live adoption |
 | test_session_repeat / test_lap_talk | once-a-day briefing, skip / full briefing; short debriefs, fair coaching |
 | reference library files | every lap in `references/` is valid (`tools/references/check_library.py`) |
@@ -55,6 +56,8 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 
 ## Reference data
 
+- `references/make_library_tracks.py F1_CIRCUITS.geojson` builds the library's starter-lap track files
+  (`references/tracks/`, needs numpy + scipy) from bacinger/f1-circuits
 - `references/make_starter_laps.py RACELINES_DIR` rebuilds the starter-lap track data embedded in sim_coach.py
   from the TUMFTM racetrack-database (`git clone --depth 1 https://github.com/TUMFTM/racetrack-database.git`).
 - `references/check_library.py` checks the shared library in `references/` (see `references/README.md`).

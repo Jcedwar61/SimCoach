@@ -87,12 +87,13 @@ check(not saved1, "starter lap never saved as a reference")
 check(any("That's your own reference now" in m for m in said) and coach.ref_source == "own", "first lap replaces it")
 own = sc.json.load(open(coach._path(), encoding="utf-8")) if os.path.exists(coach._path()) else {}
 check(own.get("source") == "own", "the saved reference is the driver's own")
-# the alignment found the sim's start-line offset (12 bins)
-c2, said2, *_ = drive("spa", 7004, laps=0.5)
-apex_shift = [b[1] - a[1] for a, b in zip(base, c2.corners)]
-med = sorted(apex_shift)[len(apex_shift) // 2] if apex_shift else 0
-check(abs(med - 12) <= 3, f"lined up by the sim's offset (moved {med} bins, offset 12)")
-c3, said3, *_ = drive("monza", 5758, laps=0.6)
+# the alignment finds the sim's start-line offset, small or several percent of a lap, on different tracks
+for tid, nm, L, off in (("Spa", "spa", 7004, 12), ("Spa", "spa", 7004, -140), ("Monza", "monza", 5758, 110),
+                        ("Suzuka", "suzuka", 5747, 150), ("Zandvoort", "zandvoort", 4244, -60)):
+    c2, said2, *_ = drive(nm, L, profile_tid=tid, true_shift=off, laps=0.6)
+    got = (c2._starter or {}).get("shift")
+    check(got is not None and abs(got - off) <= 4, f"{tid}: lined up by the sim's offset (found {got}, offset {off})")
+c3, said3, *_ = drive("monza", 5758, laps=0.7)
 check(any("doesn't match my starter lap" in m for m in said3) and c3.ref is None, "a layout that doesn't match is dropped")
 c4, said4, *_ = drive("spa", 7004, laps=0.1, enabled=False)
 check(any("Give me a clean lap" in m for m in said4) and c4.ref is None, "switched off in Settings: no starter lap")
