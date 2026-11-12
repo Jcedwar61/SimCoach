@@ -1,13 +1,19 @@
 # Benchmark lap times
 
-`gt3.json` holds quick GT3 lap times collected from sim racing leaderboards and race results. They are lap
-*times* only (no telemetry), so they can't be reference laps by themselves. SimCoach uses them two ways:
+`laps.json` holds quick, repeatable lap times by sim and car class: setup-shop reference laps, leaderboard and
+league times collected in November 2026 (each row names its source). They are lap *times* only, with no
+telemetry, so they can't be reference laps by themselves. SimCoach uses them two ways:
 
-* `tracks` (starter-lap track id → seconds): the calculated starter lap for that circuit is tuned so its GT3 lap
-  time matches, which moves its braking points and corner speeds towards a real quick lap. Other car classes at
-  that circuit get the same correction.
-* `other`: tracks SimCoach has no starter lap for, matched by name and length. The coach tells GT3 drivers the
-  target time at the start of the session.
+* **Target time.** At the start of a session the coach quotes the time for the driver's sim and class, or for
+  the exact car when a row has car phrases.
+* **Tuning starter laps.** Where SimCoach has a starter lap for the track, the calculated lap is tuned so its lap
+  time matches the benchmark for that sim and class. That moves corner speeds and braking points toward a real
+  quick lap. A benchmark too far from the calculation (another layout, an unusual car) is quoted but not tuned to.
 
-The times come from different sims, so treat them as "about this quick", not as a record for your sim. SimCoach
-downloads this file with its library check; edit it here and every SimCoach picks the change up.
+Format: `laps` rows are `[sim, class, track id, seconds, car phrases or null, source]`. `sim` is SimCoach's name
+for the sim (`ACC`, `iRacing`, `LMU`, `AMS2`, `rFactor 2`, `AC`, `AC EVO`, `F1 25`) or `*` when it wasn't
+recorded; a sim's own row wins over `*`. Track ids are starter-lap tracks (built in or in `../tracks/`) or one of
+the `tracks` in this file, which are matched by name and length.
+
+Edit the table in `tools/references/make_benchmarks.py` and run it; SimCoach downloads the file with its library
+check, so every driver gets the change without an app update.

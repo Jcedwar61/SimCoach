@@ -52,10 +52,17 @@ for f in sorted(os.listdir(tfolder)) if os.path.isdir(tfolder) else []:
     except Exception as e:
         bad += 1
         print(f"FAIL tracks/{f}: {e}")
-bpath = os.path.join(folder, "benchmarks", "gt3.json")
+bpath = os.path.join(folder, "benchmarks", "laps.json")
 if os.path.exists(bpath):
-    prob = sc.bench_problem(json.load(open(bpath, encoding="utf-8")))
-    print(f"FAIL benchmarks/gt3.json: {prob}" if prob else "ok   benchmarks/gt3.json")
+    bd = json.load(open(bpath, encoding="utf-8"))
+    prob = sc.bench_problem(bd)
+    if not prob:
+        sc._STARTER_DATA = sc._STARTER_NAMES = None
+        sc.TRACK_DIR = tfolder
+        known = set(sc.starter_tracks()) | set(bd["tracks"])
+        unknown = sorted({row[2] for row in bd["laps"]} - known)
+        prob = f"laps for unknown tracks: {', '.join(unknown)}" if unknown else None
+    print(f"FAIL benchmarks/laps.json: {prob}" if prob else f"ok   benchmarks/laps.json  ({len(bd['laps'])} lap times)")
     bad += 1 if prob else 0
 print(f"{n} laps and {nt} starter-lap tracks in the library, {bad} with problems")
 sys.exit(1 if bad else 0)
