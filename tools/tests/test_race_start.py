@@ -2,7 +2,8 @@
 from _common import check, done, headless_coach, load
 
 sc = load()
-GO = 45.0   # seconds on the grid (the session-start setup briefing plays first)
+GO = 60.0   # seconds on the grid: the engineer intro and setup briefing (~40 s) play first; a reminder that
+#             would only fit after lights-out is skipped on purpose
 
 
 def run(kind, session="race"):
@@ -12,7 +13,7 @@ def run(kind, session="race"):
     t, pct, spd, pos, L, rolling = 0.0, 0.985, 0.0, 6, 4000.0, kind == "rolling"
     if rolling:
         spd = 90.0
-    for _ in range(60 * 75):
+    for _ in range(60 * 90):
         t += 1 / 60
         moving = rolling or t >= GO
         if moving and not rolling:

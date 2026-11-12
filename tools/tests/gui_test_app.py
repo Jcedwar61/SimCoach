@@ -71,6 +71,12 @@ def run():
         app.vars["deepseek_api_key"].set("dk")
         app.save_settings(quiet=True)
         check(saved.get("ai_provider") == "deepseek" and saved.get("deepseek_api_key") == "dk", "settings saved")
+        check(app.vars["briefing_mode"].get() == "Full once a day, then short" and app.vars["sheet_autopop"].get(),
+              "briefing settings shown with their defaults")
+        app.vars["briefing_mode"].set("Full every session")
+        app.vars["sheet_autopop"].set(False)
+        app.save_settings(quiet=True)
+        check(saved.get("briefing_mode") == "always" and saved.get("sheet_autopop") is False, "briefing settings saved")
         # update banner (faked release)
         check(wait_for(lambda: getattr(app, "update_bar", None) is not None), "update banner appears")
         app._skip_update()

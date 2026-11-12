@@ -70,7 +70,11 @@ What's new (latest updates)
       change at once. "Apply all" first lists every value it will change (before -> after) and asks you
       to confirm; ticking one box shows what it changed; the radio reply says what was applied.
     * Opens by itself at the start of every session (practice, qualifying, race, hotlap or rally stage),
-      even on a rolling start, together with the strategist and coach briefing. Open or close it any time
+      even on a rolling start, together with the strategist and coach briefing. The full briefing plays the
+      first session of the day with a car and track; later sessions get one short line (say "full briefing"
+      for the rest, or "skip the briefing" to cut it). Settings > Race engineer, strategist & spotter:
+      "Setup briefing" (Full once a day, then short / Full every session / Off) and "Open the setup sheet
+      at the start of each session". Open or close it any time
       with the SETUP button on the in-game overlay, the overlay's right-click menu, a wheel button, or by
       saying "show the setup sheet". A sheet asked for later in a session, while driving, waits until you
       stop in the pits. It stays on top without stealing keyboard focus from your sim and remembers its
@@ -120,6 +124,7 @@ On track: live coaching & voice commands
     * Strategy & car status: "how much fuel", "how much fuel do I need", "how much energy", "should I pit",
       "how are my tyres", "damage check", "engine temps", "cars around me", "who's ahead", "who's behind"
     * Setup: "suggest a setup", "apply the setup", "show the setup sheet", "close the setup sheet"
+    * Briefing: "full briefing", "skip the briefing"
     * Practice drills: "work on turn 3 for five laps" (or "practise turn 7"; default 5 laps). The coach talks
       only about that corner, scores it every lap against your best there, sums up before vs during at the
       end and adds a table to the report. "Stop the drill" ends it early. Practice and qualifying only.
@@ -177,7 +182,11 @@ Tabs & settings
       game has focus (F8 is the keyboard fallback for push-to-talk).
     * Coaching: talk level (Quiet / Normal / Chatty), Coach personality (Apex all-round pro, Rotation,
       Composed, Feel, Exit, or Data; say e.g. "data coach" or "switch to composed style" on the radio),
-      braking tones, split deltas, auto-start, F1 UDP port, and SimHub port sharing.
+      braking tones, split deltas, auto-start, F1 UDP port, and SimHub port sharing. At Normal, the lap
+      debrief is short (lap time, gap to your best, one coaching point, fuel warnings) and corner callouts
+      cover your focus corners and big losses; Chatty adds everything else. Laps spoiled by traffic, a
+      yellow flag or cold tyres are never roasted or blamed. New installs start with the Composed coach and
+      Important-only crew lap reports.
     * Phone / tablet screen (off by default): tick it and open the address shown under it on a phone or
       tablet on the same Wi-Fi for a big live delta, lap times, position, gaps, fuel and the coach's last
       call. Read-only: nothing on the page can change SimCoach. Windows may ask once to allow SimCoach
