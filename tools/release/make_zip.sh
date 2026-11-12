@@ -15,6 +15,7 @@ S="$WORK/src"; Z="$WORK/zip/SimCoach"
 mkdir -p "$Z/SimCoachWeather" "$Z/installer-source" "$(dirname "$OUT")"
 cp "$S"/{sim_coach.py,README.txt,SimCoach.exe,SimCoach-Setup.exe,SimCoach.ico,SimCoach.bat,run_coach.bat,bind_push_to_talk.bat,sample_coach_report.html,LICENSE} "$Z/"
 cp "$S"/SimCoachWeather/* "$Z/SimCoachWeather/"; cp "$S"/installer-source/* "$Z/installer-source/"
+if [ -f "$S/THIRD_PARTY_NOTICES.md" ]; then cp "$S/THIRD_PARTY_NOTICES.md" "$Z/"; mkdir -p "$Z/licenses"; cp "$S"/licenses/* "$Z/licenses/"; fi
 "$PY" "$REPO/tools/installer/extract_payload.py" "$Z/SimCoach-Setup.exe" "$WORK/check" >/dev/null
 cmp -s "$WORK/check/payload/sim_coach.py" "$Z/sim_coach.py" || { echo "The installer at $REF doesn't carry its sim_coach.py: rebuild it."; exit 1; }
 rm -f "$OUT"; (cd "$WORK/zip" && zip -q -r -X "$OUT" SimCoach)

@@ -20,6 +20,7 @@ cd "$HERE/tests"
 run "syntax (pyflakes)" bash -c "'$PY' -m pyflakes '$REPO/sim_coach.py' | grep -v 'imported but unused\|assigned to but never used\|redefinition of unused' | grep . && exit 1 || exit 0"
 run "offline coaching run (--test)" bash -c "APPDATA=\$(mktemp -d) '$PY' '$REPO/sim_coach.py' --test --no-voice --no-mic --no-overlay"
 for t in test_*.py; do run "${t%.py}" "$PY" "$t"; done
+run "reference library files" "$PY" "$REPO/tools/references/check_library.py"
 if [ "$NET" = 1 ]; then for t in net_test_*.py; do run "${t%.py}" "$PY" "$t"; done; fi
 if [ "$GUI" = 1 ]; then
   if command -v xvfb-run >/dev/null && [ -z "${DISPLAY:-}" ]; then run "gui_test_app" xvfb-run -a -s "-screen 0 1280x900x24" "$PY" gui_test_app.py

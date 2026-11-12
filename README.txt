@@ -110,6 +110,19 @@ On track: live coaching & voice commands
   - Reference lap: your first clean lap (or stage run) maps every corner automatically and starts live
     coaching on the very next lap. If lap one has an off-track excursion, SimCoach still maps a provisional
     reference so coaching starts immediately, then swaps in your first clean lap.
+  - Starter laps (coaching from lap one): at 24 well-known circuits (Spa, Monza, Silverstone, Suzuka, Brands
+    Hatch GP, Zandvoort, Nurburgring GP, Barcelona, Red Bull Ring, Hungaroring, Hockenheim, COTA, Interlagos,
+    Bahrain, Sepang, Shanghai and more) SimCoach builds an approximate reference from the track's shape for
+    your car's class, when you have no lap of your own there yet. It matches the sim's track by name and
+    length (other layouts are never used), lines it up over the first two corners, then calls braking points.
+    No live delta or "time lost" against it; your first lap replaces it, and it's never saved. Settings:
+    "Starter laps". Track shapes: TUMFTM racetrack-database (LGPL-3.0), from OpenStreetMap data
+    (c) OpenStreetMap contributors. See THIRD_PARTY_NOTICES.md and github.com/TUMFTM/racetrack-database.
+  - SimCoach reference library: the first time you drive a sim / track / car with no lap of your own, SimCoach
+    checks the shared library (the references folder of SimCoach's GitHub repository) for a lap with exactly
+    that sim, track and car, and coaches you against it until you beat it. Share your own laps with
+    References > Share to library. Settings: "Use reference laps from the SimCoach library" (it asks GitHub
+    for that one file name; nothing else is sent).
   - Braking countdown: three tones (beep, beep, BEEP) timed to your reference braking point.
   - Race starts: a short reminder when you're sitting on the grid, then a start review after turn one
     (wheelspin, bogging down or lifting, 0-100 km/h time, and places gained or lost). Standing starts only.
