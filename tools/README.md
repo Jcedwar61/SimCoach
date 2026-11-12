@@ -25,6 +25,10 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_race_start | grid reminder and start review for clean / wheelspin / bog / lift; silent for rolling starts and practice |
 | test_session_briefing | setup sheet pops up and the briefing is heard at the start of every session type |
 | test_iracing | iRacing reader against a synthetic SDK memory image |
+| test_starter_laps | starter laps: track matching, car classes, lap times, line-up, replacement, mismatch drop |
+| test_reference_library | shared library downloads (local stand-in for GitHub) and the coach flow |
+| test_session_repeat / test_lap_talk | once-a-day briefing, skip / full briefing; short debriefs, fair coaching |
+| reference library files | every lap in `references/` is valid (`tools/references/check_library.py`) |
 | net_test_update_check | update check, installer download (`--network`) |
 | gui_test_app | Settings, welcome box, setup sheet confirm, overlay SETUP button, phone page, update banner (`--gui`) |
 
@@ -45,3 +49,9 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 - `installer/extract_payload.py SimCoach-Setup.exe [OUT]` lists (or extracts) the files bundled in an installer.
 - `installer/make_syso.py SRC.exe OUT.syso VERSION` writes the icon / manifest / version resources.
 - `installer/pe_resources.py` reads resources out of a .exe (used by make_syso).
+
+## Reference data
+
+- `references/make_starter_laps.py RACELINES_DIR` rebuilds the starter-lap track data embedded in sim_coach.py
+  from the TUMFTM racetrack-database (`git clone --depth 1 https://github.com/TUMFTM/racetrack-database.git`).
+- `references/check_library.py` checks the shared library in `references/` (see `references/README.md`).
