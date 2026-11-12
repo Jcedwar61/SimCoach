@@ -9,3 +9,6 @@ To rebuild (Go 1.22+):
      SimCoach.exe, SimCoach.ico, SimCoach.bat, run_coach.bat, bind_push_to_talk.bat
   2. set GOOS=windows& set GOARCH=amd64& go build -trimpath -ldflags "-H windowsgui -s -w" -o SimCoach-Setup.exe .
 Run "SimCoach-Setup.exe --silent" to install without any dialogs.
+
+Easier: tools/installer/build_installer.sh builds it from the repo and checks every bundled file,
+and tools/installer/set_version.py sets a new version everywhere (see tools/README.md).
