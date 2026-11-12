@@ -149,6 +149,16 @@ def run():
             check(False, "plain address refused")
         except Exception as e:
             check(getattr(e, "code", None) == 404, "plain address refused")
+        # References tab: the Starter laps table
+        app.nb.select(app.tab_ref)
+        wait_for(lambda: len(app.starter_tv.get_children()) > 30, 10)
+        rows = {app.starter_tv.set(i, "track"): app.starter_tv.item(i, "values") for i in app.starter_tv.get_children()}
+        spa = rows.get("Spa")
+        check(spa and spa[2] == "Built in" and spa[3].startswith("2:1") and "ACC GT3 2:16.4" in spa[7],
+              f"starter laps table: Spa with its calculated time and real targets ({spa})")
+        ls = rows.get("Laguna Seca")
+        check(ls and ls[2] == "Target times only" and ls[3] == "—" and "ACC GT3 1:21.3" in ls[7], "tracks with target times only are listed too")
+        check("circuits where coaching starts on lap one" in app.starter_lbl.cget("text"), "with an explanation above it")
         # Best laps tab: saved ready to share, the web-page route without in-app sign-in, then in-app sharing
         app.nb.select(app.tab_best)
         pump(0.5)

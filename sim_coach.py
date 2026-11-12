@@ -5220,6 +5220,43 @@ def starter_grip(tid, game, car, cls):
     return _GRIP[key], bench
 
 
+def starter_table():
+    """Rows for the Starter laps table: every circuit with a starter lap (with the calculated lap time per car
+    class) and every track that only has target times. Each row: (name, length m, kind, {class: seconds},
+    targets text)."""
+    def clock(x):
+        return fmt_time(x).replace(" ", ":")
+    b = benchmarks()
+    short = {"gt3": "GT3", "gt4": "GT4", "cup": "Cup", "gte": "GTE", "proto": "Proto", "f1": "F1",
+             "formula": "Formula", "road": "Road"}
+    by_track = {}
+    for row in b["laps"]:
+        sim, cls, tid, secs, car = row[:5]
+        what = car[0].title() if car else short.get(cls, cls)
+        by_track.setdefault(tid, []).append(("Any sim" if sim == "*" else sim, what, float(secs)))
+
+    def targets(tid):
+        return "  ·  ".join(f"{sim} {what} {clock(secs)}" for sim, what, secs in
+                            sorted(by_track.get(tid, []), key=lambda r: (r[0] == "Any sim", r[0], r[2])))
+    rows = []
+    data = _starter_data()
+    for tid, (spoken, _phrases) in starter_tracks().items():
+        times = {}
+        for cls in ("gt3", "gt4", "proto", "f1"):
+            st = starter_reference(tid, cls)
+            if st:
+                times[cls] = st["best_time"]
+        rows.append((spoken[4:] if spoken.startswith("the ") else spoken, float(data[tid][0]),
+                     "Built in" if tid in STARTER_TRACKS else "Library", times, targets(tid)))
+    for tid, o in b["tracks"].items():
+        if tid in by_track:
+            name = o["spoken"]
+            rows.append((name[4:] if name.startswith("the ") else name, float(o["length"]), "Target times only", {},
+                         targets(tid)))
+    rows.sort(key=lambda r: (r[2] == "Target times only", r[0].lower()))
+    return rows
+
+
 def track_file_problem(d):
     """None if d is a usable starter-lap track file from the library (references/tracks/), else what's wrong."""
     try:
@@ -12436,13 +12473,50 @@ class App:
         self.share_lbl.pack(side="left", padx=10)
         ttk.Label(t, text="Your reference laps (one per sim, track and car). Import a friend's or a quicker "
                           "driver's export to be coached against their lap. New laps shared to the SimCoach library "
-                          "are added automatically (your own laps are never replaced).").pack(anchor="w", pady=(4, 0))
+                          "are added automatically (your own laps are never replaced).",
+                  wraplength=1150, justify="left").pack(anchor="w", pady=(4, 0))
         self.ref_tv = self._tree(t, [("sim", "Sim"), ("track", "Track"), ("car", "Car"), ("best", "Best lap"),
                                      ("corners", "Corners"), ("source", "Source"), ("saved", "Updated")],
-                                 (110, 260, 240, 90, 70, 80, 140), 12)
-        self.starter_lbl = ttk.Label(t, text="", style="Mut.TLabel", wraplength=980, justify="left")
-        self.starter_lbl.pack(anchor="w", pady=(6, 0))
+                                 (110, 260, 240, 90, 70, 80, 140), 6)
+        self.ref_tv.master.pack_configure(expand=False)      # the starter-lap table below takes the spare room
+        self.starter_lbl = ttk.Label(t, text="Starter laps", wraplength=1150, justify="left")
+        self.starter_lbl.pack(anchor="w", pady=(2, 0))
+        self.starter_tv = self._tree(t, [("track", "Circuit"), ("len", "Length"), ("kind", "Starter lap"),
+                                         ("gt3", "GT3"), ("gt4", "GT4"), ("proto", "Prototype"), ("f1", "F1"),
+                                         ("targets", "Real target times (sim, class or car, lap)")],
+                                     (170, 70, 120, 70, 70, 80, 70, 520), 8)
+        self._starter_sig = None
         self.load_refs()
+
+    def load_starters(self):
+        """Fill the Starter laps table (worked out in the background; redone when tracks or benchmarks change)."""
+        sig = (tuple(sorted(starter_tracks())), id(benchmarks()))
+        if sig == self._starter_sig:
+            return
+        self._starter_sig = sig
+
+        def work():
+            try:
+                self.post(starter_rows=starter_table())
+            except Exception as e:
+                file_log(f"Starter laps table: {type(e).__name__}: {e}")
+        threading.Thread(target=work, daemon=True, name="starter-table").start()
+
+    def _show_starters(self, rows):
+        def clock(x):
+            return fmt_time(x).replace(" ", ":") if x else "—"
+        tv = self.starter_tv
+        tv.delete(*tv.get_children())
+        for name, length, kind, times, targets in rows:
+            tv.insert("", "end", values=(name, f"{length / 1000:.3f} km", kind, clock(times.get("gt3")),
+                                         clock(times.get("gt4")), clock(times.get("proto")), clock(times.get("f1")),
+                                         targets or "—"))
+        n = sum(1 for r in rows if r[2] != "Target times only")
+        self.starter_lbl.configure(
+            text=f"Starter laps: {n} circuits where coaching starts on lap one, in every supported sim, when you "
+                 f"have no lap of your own. The lap is calculated for your car's class (estimated times shown), "
+                 f"tuned to the real target time for your sim where there is one, and replaced by your first clean "
+                 f"lap. {len(rows) - n} more tracks have target times only.")
 
     def _ref_files(self):
         try:
@@ -12455,15 +12529,7 @@ class App:
         (each is ~100 KB of JSON; re-reading them all on every report blocked the window)."""
         tv = self.ref_tv
         tv.delete(*tv.get_children())
-        try:
-            names = sorted(v[0].replace("the ", "") for v in starter_tracks().values())
-            bench_ids = {row[2] for row in benchmarks()["laps"]}
-            tuned = sum(1 for k in starter_tracks() if k in bench_ids)
-            self.starter_lbl.configure(
-                text=f"Starter laps (calculated, for every supported sim and any car, used until you set a lap): "
-                     f"{len(names)} circuits, {tuned} tuned to real lap times. " + ", ".join(names) + ".")
-        except Exception:
-            pass
+        self.load_starters()
         cache = self.__dict__.setdefault("_ref_rows", {})
         seen = set()
         for f in self._ref_files():
@@ -14052,6 +14118,8 @@ class App:
                             shared[n]["verdict"] = v
                     save_config(self.cfg)
                 self.load_best()
+            if "starter_rows" in merged:
+                self._show_starters(merged["starter_rows"])
             if "library_sync" in merged:
                 if merged["library_sync"]:
                     self.share_lbl.configure(text=merged["library_sync"])

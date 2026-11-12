@@ -115,6 +115,8 @@ On track: live coaching & voice commands
     Bahrain, Sepang, Shanghai and more) SimCoach builds an approximate reference from the track's shape for
     your car's class, when you have no lap of your own there yet. It matches the sim's track by name and
     length (other layouts are never used), lines it up over the first part of the lap, then calls braking points.
+    The References tab lists them all in a "Starter laps" table: circuit, length, calculated lap time
+    per car class and the real target times per sim.
     Benchmarks: the library holds quick lap times by sim and car class (ACC, iRacing, LMU, AMS2, rFactor 2,
     AC, F1). The coach tells you the target for your sim and class (or exact car) at the start of a session,
     also at tracks without a starter lap, and starter laps are tuned to match it.
