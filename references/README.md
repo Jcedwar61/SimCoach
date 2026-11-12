@@ -11,11 +11,15 @@ own lap for a combination is never replaced.
 
 ## Adding a lap
 
-1. Drive a clean, quick lap. SimCoach saves it as your reference.
-2. In SimCoach: **References** tab, select the lap, **Share to library…**. That saves a copy in
-   `Documents\SimCoach Reports\Library uploads` and opens this folder's upload page on GitHub.
-3. Drag the file onto the page and commit. People without write access to this repository get a
-   "propose changes" pull request instead, for the owner to approve.
+1. Drive a clean, quick lap. SimCoach saves it as your reference, and a ready-to-share copy in
+   `Documents\SimCoach Reports\Best laps`.
+2. In SimCoach: **Best laps** tab, select the lap, **Share selected** (or **Share all new**). The first time,
+   sign in to GitHub with the code SimCoach shows (free account; your password never goes through SimCoach).
+3. The repository owner's laps go straight into this folder. Everyone else's arrive as a pull request for the
+   owner to approve; once merged, every SimCoach picks the lap up at its next library check.
+
+Without in-app sign-in, **Share selected** opens this folder's upload page on GitHub and the Best laps folder:
+drag the file onto the page and commit.
 
 Only share laps you drove yourself. A file holds the sim, track and car names and the lap trace (speed, pedals,
 corner data): no driver name, settings or keys.

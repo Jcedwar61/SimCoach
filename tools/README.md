@@ -27,6 +27,7 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_iracing | iRacing reader against a synthetic SDK memory image |
 | test_starter_laps | starter laps: track matching, car classes, lap times, line-up, replacement, mismatch drop |
 | test_reference_library | shared library downloads (local stand-in for GitHub) and the coach flow |
+| test_share_laps | Best laps folder, library fingerprint, GitHub code sign-in, owner commit vs fork + pull request (local stand-in) |
 | test_library_sync | automatic library import: new / changed / unchanged / bad files, own laps kept, live adoption |
 | test_session_repeat / test_lap_talk | once-a-day briefing, skip / full briefing; short debriefs, fair coaching |
 | reference library files | every lap in `references/` is valid (`tools/references/check_library.py`) |

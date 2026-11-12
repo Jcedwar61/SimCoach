@@ -118,10 +118,15 @@ On track: live coaching & voice commands
     No live delta or "time lost" against it; your first lap replaces it, and it's never saved. Settings:
     "Starter laps". Track shapes: TUMFTM racetrack-database (LGPL-3.0), from OpenStreetMap data
     (c) OpenStreetMap contributors. See THIRD_PARTY_NOTICES.md and github.com/TUMFTM/racetrack-database.
+  - Best laps tab: your best lap for every sim / track / car, kept ready to share in Documents\SimCoach
+    Reports\Best laps, with its library status (Not shared / Sent, waiting for approval / In the library).
+    Share selected or Share all new uploads them to the library from the app: the first time, sign in to
+    GitHub with the code SimCoach shows. The library owner's laps go straight in; other drivers' laps are
+    sent as a pull request for the owner to approve. Shared: sim, track, car and the lap trace only.
   - SimCoach reference library: the first time you drive a sim / track / car with no lap of your own, SimCoach
     checks the shared library (the references folder of SimCoach's GitHub repository) for a lap with exactly
     that sim, track and car, and coaches you against it until you beat it. Share your own laps with
-    References > Share to library. New laps shared to the library are imported automatically (at start-up,
+    the Best laps tab. New laps shared to the library are imported automatically (at start-up,
     every 12 hours, or References > Update from library); library laps that get faster are updated, and your
     own laps are never replaced. Settings: "Use and auto-import reference laps from the SimCoach library"
     (SimCoach only reads the library's file list and files from GitHub; nothing is sent).
