@@ -4999,6 +4999,105 @@ _STARTER_DATA = None
 
 
 _STARTER_NAMES = None
+# Quick GT3 lap times (s) from sim leaderboards and race results: starter laps are tuned to them, and the coach
+# quotes them as a target. The library's references/benchmarks/gt3.json (downloaded to BENCH_PATH) replaces this.
+BENCH_PATH = os.path.join(APP_DIR, "benchmarks_gt3.json")
+STARTER_BENCH = json.loads("".join(
+    "{\"tracks\":{\"Spa\":136.4,\"Monza\":106.35,\"Suzuka\":117.475,\"Spielberg\":86.867,\"Catalunya\":100.162,\"SaoPaulo\":86.23"
+    "6,\"Imola\":103.364,\"Mugello\":107.222,\"Nuerburgring\":115.416,\"Hockenheim\":97.522,\"Oschersleben\":81.16,\"BrandsHat"
+    "ch\":82.152,\"Sakhir\":118.476},\"other\":[{\"spoken\":\"the Nordschleife\",\"phrases\":[\"nordschleife\"],\"length\":20832,\""
+    "time\":394.067},{\"spoken\":\"the Nürburgring 24 hour layout\",\"phrases\":[\"nordschleife\",\"nurburgring\",\"24h\"],\"leng"
+    "th\":25378,\"time\":506.535},{\"spoken\":\"Le Mans\",\"phrases\":[\"le mans\",\"sarthe\"],\"length\":13626,\"time\":233.398},{\""
+    "spoken\":\"Road Atlanta\",\"phrases\":[\"road atlanta\",\"atlanta\"],\"length\":4088,\"time\":78.395},{\"spoken\":\"Fuji\",\"phr"
+    "ases\":[\"fuji\"],\"length\":4563,\"time\":101.488},{\"spoken\":\"the Daytona road course\",\"phrases\":[\"daytona\"],\"length"
+    "\":5730,\"time\":102.303},{\"spoken\":\"Jerez\",\"phrases\":[\"jerez\"],\"length\":4428,\"time\":95.721},{\"spoken\":\"Zhuhai\",\""
+    "phrases\":[\"zhuhai\"],\"length\":4319,\"time\":92.485},{\"spoken\":\"Bathurst\",\"phrases\":[\"bathurst\",\"mount panorama\",\""
+    "panorama\"],\"length\":6213,\"time\":124.202},{\"spoken\":\"Silverstone National\",\"phrases\":[\"silverstone\"],\"length\":2"
+    "639,\"time\":52.62},{\"spoken\":\"the Indianapolis road course\",\"phrases\":[\"indianapolis\"],\"length\":3925,\"time\":82."
+    "441}]}"
+))
+_BENCH = None
+_GRIP = {}
+
+
+def bench_problem(d):
+    """None if d is a usable benchmark file, else what's wrong."""
+    try:
+        if not isinstance(d, dict) or not isinstance(d.get("tracks"), dict) or not isinstance(d.get("other", []), list):
+            return "not a benchmark file"
+        for k, v in d["tracks"].items():
+            if not (re.fullmatch(r"[A-Za-z0-9]{2,40}", k) and type(v) in (int, float) and 20 <= v <= 1800):
+                return "bad track time"
+        for o in d.get("other", []):
+            if not (isinstance(o, dict) and isinstance(o.get("spoken"), str) and 2 <= len(o["spoken"]) <= 60
+                    and isinstance(o.get("phrases"), list) and 1 <= len(o["phrases"]) <= 10
+                    and all(isinstance(x, str) and re.fullmatch(r"[a-z0-9]+( [a-z0-9]+)*", x) for x in o["phrases"])
+                    and type(o.get("length")) in (int, float) and 500 <= o["length"] <= 30000
+                    and type(o.get("time")) in (int, float) and 20 <= o["time"] <= 1800):
+                return "bad entry"
+    except Exception as e:
+        return f"unreadable ({e})"
+    return None
+
+
+def benchmarks():
+    global _BENCH
+    if _BENCH is None:
+        d = None
+        try:
+            with open(BENCH_PATH, encoding="utf-8") as fh:
+                d = json.load(fh)
+            if bench_problem(d):
+                d = None
+        except Exception:
+            d = None
+        _BENCH = d or STARTER_BENCH
+    return _BENCH
+
+
+def benchmarks_changed():
+    global _BENCH
+    _BENCH = None
+    _GRIP.clear()
+
+
+def benchmark_time(game, track, track_len, tid=None):
+    """(seconds, spoken track name or None) of a quick GT3 lap at this track; None without a benchmark for it."""
+    b = benchmarks()
+    if tid:
+        return (float(b["tracks"][tid]), None) if tid in b["tracks"] else None
+    if game in RALLY_GAMES or not track_len:
+        return None
+    n = _plain_name(track)
+    for o in b.get("other", []):
+        if any(f" {ph} " in n for ph in o["phrases"]) and abs(track_len - o["length"]) / o["length"] <= 0.03:
+            return float(o["time"]), o["spoken"]
+    return None
+
+
+def _starter_grip(tid, k, ds):
+    """Grip factor that makes the calculated GT3 lap at this track match its benchmark time (1.0 without one, or
+    when the benchmark is more than 7 % away from the calculation: then one of the two is for another layout)."""
+    if tid not in _GRIP:
+        g = 1.0
+        target = benchmarks()["tracks"].get(tid)
+        if target:
+            def lap_t(gr):
+                c = dict(STARTER_CARS["gt3"])
+                c["mu"], c["mu_brk"] = c["mu"] * gr, c["mu_brk"] * gr
+                return _lap_sim(k, ds, c)[4]
+            base = lap_t(1.0)
+            if abs(target - base) / base <= 0.07:
+                lo, hi = 0.75, 1.3
+                for _ in range(14):
+                    g = (lo + hi) / 2
+                    if lap_t(g) > target:
+                        lo = g
+                    else:
+                        hi = g
+        _GRIP[tid] = g
+    return _GRIP[tid]
+
 
 
 def track_file_problem(d):
@@ -5073,6 +5172,7 @@ def starter_tracks():
 def starter_tracks_changed():
     global _STARTER_DATA, _STARTER_NAMES
     _STARTER_DATA = _STARTER_NAMES = None
+    _GRIP.clear()
 
 
 def _plain_name(x):
@@ -5179,7 +5279,10 @@ def starter_reference(tid, cls="gt3", shift=0):
     if shift:
         shift %= BINS
         k = k[-shift:] + k[:-shift]
-    v, thr, brk, t, lap_t = _lap_sim(k, L / BINS, STARTER_CARS.get(cls, STARTER_CARS["gt3"]))
+    car = dict(STARTER_CARS.get(cls, STARTER_CARS["gt3"]))
+    grip = _starter_grip(tid, k, L / BINS)           # tuned to a real quick lap here, when there's a benchmark
+    car["mu"], car["mu_brk"] = car["mu"] * grip, car["mu_brk"] * grip
+    v, thr, brk, t, lap_t = _lap_sim(k, L / BINS, car)
     ref = {"speed": [round(x * 3.6, 2) for x in v], "thr": thr, "brk": brk, "t": [round(x, 3) for x in t],
            "steer": [0.0] * BINS, "lock": [0] * BINS, "spin": [0] * BINS, "overlap": [0] * BINS}
     corners = find_corners(ref)
@@ -5960,10 +6063,12 @@ class Coach:
         self._starter = {"tid": tid, "cls": cls, "aligned": False, "seen": {}}
         self._set_focus(self.starter_focus())
         spoken = starter_tracks()[tid][0]
+        bench = benchmark_time(f.game, f.track, f.track_len, tid) if cls == "gt3" else None
+        target = f" A quick GT3 lap here is about {fmt_time(bench[0])}." if bench else ""
         self.say(f"Radio check, {name}. No lap of yours here yet, so I've built a starter lap for {spoken} from the "
-                 f"track layout, set up for a {self._CLASS_SPOKEN.get(cls, 'GT3 car')}. Braking points are approximate. "
-                 f"I'll line it up over the first part of the lap, then call them. Your first lap replaces it.",
-                 now, force=True)
+                 f"track layout, set up for a {self._CLASS_SPOKEN.get(cls, 'GT3 car')}.{target} Braking points are "
+                 f"approximate. I'll line it up over the first part of the lap, then call them. Your first lap "
+                 f"replaces it.", now, force=True)
         return True
 
     _ALIGN_W = 0.08        # how far (fraction of a lap) the sim's start line may sit from the starter lap's
@@ -6175,7 +6280,10 @@ class Coach:
                 self.say(f"Radio check, {name}. {f.track}, your best here is {fmt_time(self.best_time)}.{extra} "
                          f"{len(self.corners)} corners mapped, coaching is live.", now, force=True)
             elif not self._try_starter(f, now, name):
-                self.say(f"Radio check, {name}. Give me a clean lap and I'll map the corners.", now, force=True)
+                bench = (benchmark_time(f.game, f.track, f.track_len)
+                         if self.cfg.get("starter_laps", True) and car_class(f.game, f.car) == "gt3" else None)
+                target = f" A quick GT3 lap at {bench[1]} is about {fmt_time(bench[0])}." if bench and bench[1] else ""
+                self.say(f"Radio check, {name}.{target} Give me a clean lap and I'll map the corners.", now, force=True)
             if self.ref_source in (None, "starter"):
                 self._library_lookup(key, now)
         self.track_len = f.track_len or self.track_len
@@ -10878,6 +10986,34 @@ def list_library(timeout=8.0, api=None):
             and it.get("type", "file") == "file"]
 
 
+def sync_library_benchmarks(timeout=8.0, base=None, path=None, log=print):
+    """Fetch the library's benchmark lap times (references/benchmarks/gt3.json). True if they changed here."""
+    import urllib.error
+    path = path or BENCH_PATH
+    try:
+        raw = _library_get((base or LIBRARY_URL) + "benchmarks/gt3.json", timeout, limit=200_000)
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        return False
+    prob = bench_problem(json.loads(raw.decode("utf-8")))
+    if prob:
+        log(f"Library benchmarks not used: {prob}")
+        return False
+    try:
+        with open(path, "rb") as fh:
+            if fh.read() == raw:
+                return False
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path + ".tmp", "wb") as fh:
+        fh.write(raw)
+    os.replace(path + ".tmp", path)
+    benchmarks_changed()
+    return True
+
+
 def sync_library_tracks(seen, track_dir=None, timeout=8.0, api=None, log=print):
     """Bring the library's starter-lap track shapes (references/tracks/) into TRACK_DIR: new and changed files
     are downloaded, files taken out of the library are removed. Returns the names of the tracks added or updated."""
@@ -12767,6 +12903,8 @@ class App:
                     self.cfg["library_tracks_seen"] = tseen
                     if tracks:
                         self.log(f"Starter laps added for: {', '.join(tracks)}")
+                    if sync_library_benchmarks(log=self.log):
+                        self.log("Benchmark lap times updated from the library.")
                 except Exception as e:
                     file_log(f"Library track sync failed: {type(e).__name__}: {e}")
                 save_config(self.cfg)

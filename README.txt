@@ -115,6 +115,8 @@ On track: live coaching & voice commands
     Bahrain, Sepang, Shanghai and more) SimCoach builds an approximate reference from the track's shape for
     your car's class, when you have no lap of your own there yet. It matches the sim's track by name and
     length (other layouts are never used), lines it up over the first part of the lap, then calls braking points.
+    Where the library has a real quick GT3 lap time for the track (benchmarks), the starter lap is tuned to
+    it and GT3 drivers are told the target time.
     More circuits arrive automatically from the library's tracks folder (19 so far, e.g. Imola, Mugello,
     Monaco, Paul Ricard, Portimao, Kyalami, Watkins Glen; track shapes from bacinger/f1-circuits, MIT).
     No live delta or "time lost" against it; your first lap replaces it, and it's never saved. Settings:

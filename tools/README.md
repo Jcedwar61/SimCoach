@@ -29,6 +29,7 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_reference_library | shared library downloads (local stand-in for GitHub) and the coach flow |
 | test_library_review | GitHub-side checker that adds shared laps (faster / slower / broken / mismatched / non-lap PRs) |
 | test_share_laps | Best laps folder, library fingerprint, GitHub code sign-in, owner commit vs fork + pull request (local stand-in) |
+| test_benchmarks | benchmark lap times: starter laps tuned to them, target announcements, library file |
 | test_library_tracks | starter-lap track shapes from the library: checks, download, use, removal |
 | test_library_sync | automatic library import: new / changed / unchanged / bad files, own laps kept, live adoption |
 | test_session_repeat / test_lap_talk | once-a-day briefing, skip / full briefing; short debriefs, fair coaching |

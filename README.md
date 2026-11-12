@@ -12,6 +12,7 @@
 
 ### What's new in 6.8
 * **Starter laps at 19 more circuits**, delivered through the library so every SimCoach gets them automatically (no app update needed for future tracks): Imola, Mugello, Monaco, Paul Ricard, Portimão, Kyalami, Watkins Glen, Estoril, Magny-Cours, Istanbul, Singapore, Baku, Jeddah, Miami, Las Vegas, Lusail, Madrid, Buenos Aires and Jacarepaguá. That makes 43 circuits with coaching from lap one, for any supported sim and car. These are calculated laps (approximate braking points, no live delta); your first clean lap replaces them. Track shapes: [bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) (MIT).
+* **Starter laps tuned to real lap times:** quick GT3 times from sim leaderboards and race results (in the library's [benchmarks](references/benchmarks/gt3.json)) set the pace of the calculated lap at 13 circuits, and the coach tells GT3 drivers the target ("a quick GT3 lap here is about 2:16.4"). At 11 more tracks without a starter lap (Nordschleife, Le Mans, Bathurst, Road Atlanta, Daytona, Fuji and others) the coach still quotes the target. Untuned, the calculated laps were already within 4 % of every benchmark.
 * **Starter laps line up far more reliably:** the lap is matched to the sim's start line from the shape of your speed trace over the first part of the lap, and copes with start lines up to 8 % of a lap away (the old method often gave up).
 
 ### What's new in 6.7.1
