@@ -13,3 +13,17 @@ The race lines in that database were computed from centre lines fetched from **O
 Changes made by SimCoach: each race line's curvature is resampled to 2000 points per lap, rounded and stored as
 compressed differences. The tool that does this, `tools/references/make_starter_laps.py`, rebuilds the embedded
 block from the original files, so the data can be inspected, modified and replaced.
+
+The starter-lap tracks in the library (`references/tracks/*.json`, downloaded by the app) are derived from
+**bacinger/f1-circuits** — https://github.com/bacinger/f1-circuits — Copyright (c) 2019-2025 Tomislav Bacinger,
+**MIT License**:
+
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+> documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+> the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and
+> to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above
+> copyright notice and this permission notice shall be included in all copies or substantial portions of the
+> Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+Changes made by SimCoach (`tools/references/make_library_tracks.py`): each centre line is smoothed, a racing line
+is fitted inside a 10 m corridor, and its curvature is stored at 2000 points per lap.

@@ -67,11 +67,12 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.7.1"
+APP_VERSION = "6.8"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
 REF_DIR = os.path.join(APP_DIR, "references")
+TRACK_DIR = os.path.join(APP_DIR, "tracks")          # starter-lap track shapes downloaded from the library
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG = {
     "driver_name": "",
@@ -123,6 +124,7 @@ DEFAULT_CONFIG = {
     "sheet_autopop": True,
     "update_skip": "",
     "library_seen": {},
+    "library_tracks_seen": {},
     "shared_laps": {},
     "github_token": "",
     "github_login": "",
@@ -4996,16 +4998,81 @@ _STARTER_CLASS_WORDS = (   # first match wins; a word matches at the start of a 
 _STARTER_DATA = None
 
 
-def _starter_data():
-    global _STARTER_DATA
+_STARTER_NAMES = None
+
+
+def track_file_problem(d):
+    """None if d is a usable starter-lap track file from the library (references/tracks/), else what's wrong."""
+    try:
+        if not isinstance(d, dict):
+            return "not a track file"
+        tid = d.get("id")
+        if not (isinstance(tid, str) and re.fullmatch(r"[A-Za-z0-9]{2,40}", tid)):
+            return "bad id"
+        if not (isinstance(d.get("spoken"), str) and 2 <= len(d["spoken"]) <= 60 and d["spoken"].isprintable()):
+            return "bad spoken name"
+        ph = d.get("phrases")
+        if not (isinstance(ph, list) and 1 <= len(ph) <= 10
+                and all(isinstance(x, str) and re.fullmatch(r"[a-z0-9]+( [a-z0-9]+)*", x) and 3 <= len(x) <= 40
+                        for x in ph)):
+            return "bad name phrases"
+        L = d.get("length")
+        if not (type(L) in (int, float) and 500 <= L <= 30000):
+            return "bad length"
+        steps = d.get("steps")
+        if not (isinstance(steps, list) and len(steps) == BINS and all(type(x) is int for x in steps)):
+            return "bad curvature data"
+        acc = 0
+        for x in steps:
+            acc += x
+            if abs(acc) > 20000:                     # 0.2 / m: tighter than a 5 m radius
+                return "curvature out of range"
+    except Exception as e:
+        return f"unreadable ({e})"
+    return None
+
+
+def _starter_load():
+    """Starter-lap tracks: the ones built into SimCoach plus any downloaded from the library (TRACK_DIR)."""
+    global _STARTER_DATA, _STARTER_NAMES
     if _STARTER_DATA is None:
         try:
             import base64
             import zlib
-            _STARTER_DATA = json.loads(zlib.decompress(base64.b64decode("".join(STARTER_TRACKS_B64))).decode())
+            data = json.loads(zlib.decompress(base64.b64decode("".join(STARTER_TRACKS_B64))).decode())
         except Exception:
-            _STARTER_DATA = {}
-    return _STARTER_DATA
+            data = {}
+        names = {k: v for k, v in STARTER_TRACKS.items() if k in data}
+        try:
+            files = sorted(f for f in os.listdir(TRACK_DIR) if f.endswith(".json"))
+        except OSError:
+            files = []
+        for f in files:
+            try:
+                with open(os.path.join(TRACK_DIR, f), encoding="utf-8") as fh:
+                    d = json.load(fh)
+                if track_file_problem(d) or d["id"] in data:
+                    continue
+                data[d["id"]] = [float(d["length"]), d["steps"]]
+                names[d["id"]] = (d["spoken"], tuple(d["phrases"]))
+            except Exception:
+                continue
+        _STARTER_DATA, _STARTER_NAMES = data, names
+    return _STARTER_DATA, _STARTER_NAMES
+
+
+def _starter_data():
+    return _starter_load()[0]
+
+
+def starter_tracks():
+    """{track id: (spoken name, phrases matched against the sim's track name)} for every starter-lap track."""
+    return _starter_load()[1]
+
+
+def starter_tracks_changed():
+    global _STARTER_DATA, _STARTER_NAMES
+    _STARTER_DATA = _STARTER_NAMES = None
 
 
 def _plain_name(x):
@@ -5023,7 +5090,7 @@ def starter_track(game, track, track_len):
     if " reverse " in n or " rev " in n:
         return None
     data = _starter_data()
-    for tid, (_spoken, phrases) in STARTER_TRACKS.items():
+    for tid, (_spoken, phrases) in starter_tracks().items():
         if tid in data and any(f" {ph} " in n for ph in phrases):
             L = data[tid][0]
             if abs(track_len - L) / L <= 0.03:
@@ -5892,47 +5959,64 @@ class Coach:
         self._install_ref(st, True, "starter")
         self._starter = {"tid": tid, "cls": cls, "aligned": False, "seen": {}}
         self._set_focus(self.starter_focus())
-        spoken = STARTER_TRACKS[tid][0]
+        spoken = starter_tracks()[tid][0]
         self.say(f"Radio check, {name}. No lap of yours here yet, so I've built a starter lap for {spoken} from the "
                  f"track layout, set up for a {self._CLASS_SPOKEN.get(cls, 'GT3 car')}. Braking points are approximate. "
-                 f"I'll line it up over the first couple of corners, then call them. Your first lap replaces it.",
+                 f"I'll line it up over the first part of the lap, then call them. Your first lap replaces it.",
                  now, force=True)
         return True
 
+    _ALIGN_W = 0.08        # how far (fraction of a lap) the sim's start line may sit from the starter lap's
+    _ALIGN_AT = (0.25, 0.40, 0.55)     # tried when this much of the first lap has been driven
+
     def _starter_align(self, i, now):
-        """Line the starter lap up with the sim's track: compare where the driver's speed bottoms out in the first
-        corners with the starter lap's apexes (apexes depend on the track, not on how fast you take them)."""
+        """Line the starter lap up with the sim's track: slide it along the lap until its speed trace has the same
+        shape as the driver's so far (where they slow down and speed up depends on the track, not on their pace)."""
         st = self._starter
         if st is None or st["aligned"]:
             return
-        w = int(0.04 * BINS)
-        lap = self.lap
-        for ci, (_s0, apex, _ex) in enumerate(self.corners):
-            if ci in st["seen"] or apex < w or i < apex + w or i > apex + 3 * w:
-                continue
-            seg = [(lap.speed[b], b) for b in range(apex - w, min(BINS, apex + w + 1)) if lap.speed[b] == lap.speed[b]]
-            if len(seg) < w:
-                st["seen"][ci] = None
-                continue
-            vmin, b = min(seg)
-            st["seen"][ci] = (b - apex) if max(x for x, _ in seg) - vmin >= 25 else None
-        offs = sorted(o for o in st["seen"].values() if o is not None)
-        if len(offs) < 2:
+        tries = st.setdefault("tries", 0)
+        if tries >= len(self._ALIGN_AT) or i < int(self._ALIGN_AT[tries] * BINS):
             return
-        if offs[-1] - offs[0] > int(0.015 * BINS):
-            # the corners don't line up consistently: a different layout or version of the track
-            self.clear_reference()
-            self.ref_source, self._starter = None, None
-            self.say("This track doesn't match my starter lap, so I'll map the corners from your first clean lap.", now,
-                     force=True)
+        st["tries"] = tries + 1
+        last = st["tries"] >= len(self._ALIGN_AT)
+        spd = self.lap.speed
+        lo = int(0.02 * BINS)                      # skip the launch / pit exit
+        pts = [(b, spd[b]) for b in range(lo, min(i, BINS)) if spd[b] == spd[b]]
+        best_s, best_c = 0, -1.0
+        if len(pts) >= 0.6 * (i - lo):
+            ref = self.ref["speed"]
+            n = len(pts)
+            my = sum(v for _b, v in pts) / n
+            dy = [v - my for _b, v in pts]
+            syy = sum(x * x for x in dy)
+            W = int(self._ALIGN_W * BINS)
+            if syy > n * 25.0:                     # the driver's speed really varied (not a slow cruise)
+                for sft in range(-W, W + 1, 2):
+                    xs = [ref[(b - sft) % BINS] for b, _v in pts]
+                    mx = sum(xs) / n
+                    sxy = sxx = 0.0
+                    for x, y in zip(xs, dy):
+                        x -= mx
+                        sxy += x * y
+                        sxx += x * x
+                    c = sxy / math.sqrt(sxx * syy) if sxx > 0 else -1.0
+                    if c > best_c:
+                        best_s, best_c = sft, c
+        if best_c < 0.8:
+            if last:
+                # the speed trace never fits: a different layout or version of the track
+                self.clear_reference()
+                self.ref_source, self._starter = None, None
+                self.say("This track doesn't match my starter lap, so I'll map the corners from your first clean lap.",
+                         now, force=True)
             return
-        off = offs[len(offs) // 2]
-        if abs(off) > 3:
-            moved = starter_reference(st["tid"], st["cls"], shift=off)
+        if abs(best_s) > 3:
+            moved = starter_reference(st["tid"], st["cls"], shift=best_s)
             if moved and len(moved["corners"]) >= 3:
                 self._install_ref(moved, True, "starter")
                 self._set_focus(self.starter_focus())
-        st["aligned"] = True
+        st["aligned"], st["shift"] = True, best_s
         self.say("Starter lap lined up. Braking calls are on.", now, force=True)
 
     def _library_lookup(self, key, now):
@@ -10794,6 +10878,54 @@ def list_library(timeout=8.0, api=None):
             and it.get("type", "file") == "file"]
 
 
+def sync_library_tracks(seen, track_dir=None, timeout=8.0, api=None, log=print):
+    """Bring the library's starter-lap track shapes (references/tracks/) into TRACK_DIR: new and changed files
+    are downloaded, files taken out of the library are removed. Returns the names of the tracks added or updated."""
+    import urllib.error
+    store = track_dir or TRACK_DIR
+    try:
+        listing = list_library(timeout, (api or LIBRARY_API) + "/tracks")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        listing = []
+    names = {it["name"] for it in listing}
+    changed = []
+    for name in [n for n in seen if n not in names]:
+        del seen[name]
+        try:
+            os.remove(os.path.join(store, name))
+            changed.append(name)
+        except OSError:
+            pass
+    got = []
+    for it in listing:
+        name = it["name"]
+        if seen.get(name) == it["sha"] or not it["url"] or it["size"] > 200_000 \
+                or not re.fullmatch(r"[A-Za-z0-9]{2,40}\.json", name):
+            continue
+        try:
+            raw = _library_get(it["url"], timeout, limit=200_000)
+            d = json.loads(raw.decode("utf-8"))
+            prob = track_file_problem(d)
+            if prob or d["id"] + ".json" != name:
+                raise ValueError(prob or "id doesn't match the file name")
+            if d["id"] in STARTER_TRACKS:           # built in already
+                seen[name] = it["sha"]
+                continue
+            os.makedirs(store, exist_ok=True)
+            with open(os.path.join(store, name + ".tmp"), "wb") as fh:
+                fh.write(raw)
+            os.replace(os.path.join(store, name + ".tmp"), os.path.join(store, name))
+            got.append(d["spoken"])
+        except Exception as e:
+            log(f"Library track {name} not used: {e}")
+        seen[name] = it["sha"]
+    if got or changed:
+        starter_tracks_changed()
+    return got
+
+
 def sync_library(coach, seen, store_dir=None, timeout=8.0, api=None, log=print):
     """Bring the shared library's laps into the reference folder: new combinations are added, library laps that
     changed in the library are updated, and library laps taken out of the library are removed. The driver's own
@@ -12628,10 +12760,24 @@ class App:
                 seen = dict(self.cfg.get("library_seen") or {})
                 added, updated = sync_library(self.coach, seen, REF_DIR, log=self.log)
                 self.cfg["library_seen"] = seen
+                tracks = []
+                try:
+                    tseen = dict(self.cfg.get("library_tracks_seen") or {})
+                    tracks = sync_library_tracks(tseen, log=self.log)
+                    self.cfg["library_tracks_seen"] = tseen
+                    if tracks:
+                        self.log(f"Starter laps added for: {', '.join(tracks)}")
+                except Exception as e:
+                    file_log(f"Library track sync failed: {type(e).__name__}: {e}")
                 save_config(self.cfg)
-                msg = (f"Library: {len(added)} new reference lap{'s' if len(added) != 1 else ''}"
-                       + (f", {len(updated)} updated" if updated else "") + "." if (added or updated) else
-                       "Library: you have every lap in it." if manual else "")
+                parts = []
+                if added or updated:
+                    parts.append(f"{len(added)} new reference lap{'s' if len(added) != 1 else ''}"
+                                 + (f", {len(updated)} updated" if updated else ""))
+                if tracks:
+                    parts.append(f"starter laps for {len(tracks)} more track{'s' if len(tracks) != 1 else ''}")
+                msg = ("Library: " + "; ".join(parts) + "." if parts else
+                       "Library: you have everything in it." if manual else "")
                 for k in added + updated:
                     self.log(f"Library lap {'updated' if k in updated else 'added'}: {k[0]} · {k[1]} · {k[2]}")
                 self.post(library_sync=msg)

@@ -110,11 +110,13 @@ On track: live coaching & voice commands
   - Reference lap: your first clean lap (or stage run) maps every corner automatically and starts live
     coaching on the very next lap. If lap one has an off-track excursion, SimCoach still maps a provisional
     reference so coaching starts immediately, then swaps in your first clean lap.
-  - Starter laps (coaching from lap one): at 24 well-known circuits (Spa, Monza, Silverstone, Suzuka, Brands
+  - Starter laps (coaching from lap one): at 24 built-in circuits (Spa, Monza, Silverstone, Suzuka, Brands
     Hatch GP, Zandvoort, Nurburgring GP, Barcelona, Red Bull Ring, Hungaroring, Hockenheim, COTA, Interlagos,
     Bahrain, Sepang, Shanghai and more) SimCoach builds an approximate reference from the track's shape for
     your car's class, when you have no lap of your own there yet. It matches the sim's track by name and
-    length (other layouts are never used), lines it up over the first two corners, then calls braking points.
+    length (other layouts are never used), lines it up over the first part of the lap, then calls braking points.
+    More circuits arrive automatically from the library's tracks folder (19 so far, e.g. Imola, Mugello,
+    Monaco, Paul Ricard, Portimao, Kyalami, Watkins Glen; track shapes from bacinger/f1-circuits, MIT).
     No live delta or "time lost" against it; your first lap replaces it, and it's never saved. Settings:
     "Starter laps". Track shapes: TUMFTM racetrack-database (LGPL-3.0), from OpenStreetMap data
     (c) OpenStreetMap contributors. See THIRD_PARTY_NOTICES.md and github.com/TUMFTM/racetrack-database.

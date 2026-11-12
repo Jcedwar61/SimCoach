@@ -32,5 +32,25 @@ for f in sorted(os.listdir(folder)):
     except Exception as e:
         bad += 1
         print(f"FAIL {f}: {e}")
-print(f"{n} laps in the library, {bad} with problems")
+tfolder = os.path.join(folder, "tracks")
+nt = 0
+for f in sorted(os.listdir(tfolder)) if os.path.isdir(tfolder) else []:
+    if not f.endswith(".json"):
+        continue
+    nt += 1
+    try:
+        d = json.load(open(os.path.join(tfolder, f), encoding="utf-8"))
+        prob = sc.track_file_problem(d)
+        if prob or d["id"] + ".json" != f:
+            raise ValueError(prob or "id doesn't match the file name")
+        sc._STARTER_DATA, sc._STARTER_NAMES = {d["id"]: [float(d["length"]), d["steps"]]}, {}
+        st = sc.starter_reference(d["id"], "gt3")
+        if not st or len(st["corners"]) < 3:
+            raise ValueError("no usable starter lap")
+        print(f"ok   tracks/{f}  ({d['length']:.0f} m, GT3 {sc.fmt_time(st['best_time']).replace(' ', ':')}, "
+              f"{len(st['corners'])} corners)")
+    except Exception as e:
+        bad += 1
+        print(f"FAIL tracks/{f}: {e}")
+print(f"{n} laps and {nt} starter-lap tracks in the library, {bad} with problems")
 sys.exit(1 if bad else 0)
