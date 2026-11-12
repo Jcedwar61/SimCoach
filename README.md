@@ -12,6 +12,7 @@
 
 ### What's new in 6.7.1
 * **Sharing fixes:** sharing works for drivers whose copy of the library on GitHub is out of date; clearer messages when GitHub sign-in can't start; laps shared by several drivers at the same moment are all processed.
+* **Library clean-up:** a lap that's taken out of the library is removed from everyone's downloaded laps at the next check (your own laps are never touched).
 
 ### What's new in 6.7
 * **Best laps tab:** your best lap for every sim, track and car, saved ready to share (*Documents\SimCoach Reports\Best laps*), with its library status.
