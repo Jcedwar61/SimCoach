@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.9)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.9.1)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -19,11 +19,14 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Race starts and drills:** a grid reminder and a start review after turn one; say *"work on turn 3 for five laps"* for a focused drill.
 * **Setup help:** a setup briefing and a click-to-apply setup sheet at the start of every session (it shows each change and asks first).
 * **Shared reference library:** laps other drivers share are downloaded automatically for your exact sim, track and car. The **Best laps** tab keeps your own best laps and shares them in one click (free GitHub sign-in); a shared lap is checked and added automatically if it's the fastest for that combination.
-* **Overlay and phone screen:** a click-through overlay with delta and pedal traces, plus an optional live page for a phone or tablet on the same Wi-Fi.
+* **Overlay and phone screen:** a click-through overlay with delta and pedal traces, plus a live page for a phone or tablet on the same Wi-Fi (click *Phone screen* and scan the code).
 * **Talk to it:** push-to-talk (wheel button or F8) with offline speech recognition; optional AI answers, banter and setup briefings through OpenAI, Google Gemini or DeepSeek, with automatic fallback.
 * **Reports:** an HTML report after each session.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.9.1
+* **Phone screen button:** the phone / tablet live screen was hidden in Settings. A *Phone screen* button at the top of the window now switches it on and shows a QR code to scan, the address, *Copy address* and *Test on this PC*.
 
 ### What's new in 6.9
 * **Benchmark lap times for every sim:** 87 quick, repeatable lap times by sim and car class (ACC, iRacing, Le Mans Ultimate, Automobilista 2, rFactor 2, Assetto Corsa and F1) are in the library's [benchmarks](references/benchmarks/laps.json), from setup-shop reference laps, leaderboards and league results. At the start of a session the coach tells you the target for your sim and class ("a quick GT3 lap here is about 2:16.4"), or for your exact car where there is one (e.g. the GTP cars at Montreal). 48 tracks have targets, including ones with no starter lap (Nordschleife, Le Mans, Bathurst, Laguna Seca, Road Atlanta, Long Beach, The Bend and more).

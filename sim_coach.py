@@ -11,6 +11,7 @@
 #   "openai>=1.60",
 #   "keyboard",
 #   "psutil",
+#   "segno",
 #   "pywin32; sys_platform == 'win32'",
 # ]
 # ///
@@ -67,7 +68,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.9"
+APP_VERSION = "6.9.1"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -11948,6 +11949,7 @@ class App:
         self.start_btn = ttk.Button(top, text="Start coaching", style="Accent.TButton", command=self.toggle)
         self.start_btn.pack(side="right")
         ttk.Button(top, text="Overlay", command=self.toggle_overlay).pack(side="right", padx=8)
+        ttk.Button(top, text="Phone screen", command=self.phone_screen_dialog).pack(side="right")
         self.ov_lock_btn = ttk.Button(top, text="Unlock overlay" if self.cfg.get("overlay_locked") else "Lock overlay",
                                       command=self.toggle_overlay_lock)
         self.ov_lock_btn.pack(side="right")
@@ -12343,7 +12345,7 @@ class App:
         ttk.Checkbutton(c, text="Share F1 25 / DiRT Rally 2.0 telemetry with SimHub",
                         variable=self.vars["udp_share_simhub"]).pack(anchor="w", pady=(4, 0))
         self.vars["second_screen"] = tk.BooleanVar(value=bool(self.cfg.get("second_screen")))
-        ttk.Checkbutton(c, text="Phone / tablet live screen (same Wi-Fi)",
+        ttk.Checkbutton(c, text="Phone / tablet live screen (same Wi-Fi; the Phone screen button up top shows how)",
                         variable=self.vars["second_screen"]).pack(anchor="w", pady=(4, 0))
         self.screen_lbl = ttk.Label(c, text="", style="Mut.TLabel")
         self.screen_lbl.pack(anchor="w")
@@ -13107,6 +13109,111 @@ class App:
             got, total = p
             self.update_msg.configure(text=f"Downloading… {got * 100 // total}%" if total else
                                       f"Downloading… {got // 1024} KB")
+
+    def phone_screen_dialog(self):
+        """Top bar > Phone screen: switch the live page for a phone or tablet on, and show how to open it
+        (address, QR code to scan, copy / test buttons)."""
+        if getattr(self, "_phone_dlg", None) is not None:
+            try:
+                self._phone_dlg.lift()
+                return
+            except Exception:
+                self._phone_dlg = None
+        tk, ttk = self.tk, self.ttk
+        dlg = self._phone_dlg = tk.Toplevel(self.root)
+        dlg.title("Phone / tablet screen")
+        dlg.configure(bg=C["bg"])
+        dlg.transient(self.root)
+        dlg.resizable(False, False)
+        box = ttk.Frame(dlg, padding=20)
+        box.pack(fill="both", expand=True)
+        ttk.Label(box, text="Live screen on your phone or tablet", style="H.TLabel").pack(anchor="w")
+        ttk.Label(box, wraplength=440, justify="left",
+                  text="A big live delta, lap times, position, gaps, fuel and the coach's last call. "
+                       "Read-only: nothing on the page can change SimCoach.").pack(anchor="w", pady=(4, 10))
+        steps = ttk.Label(box, wraplength=440, justify="left", text="")
+        steps.pack(anchor="w")
+        qr = tk.Canvas(box, width=10, height=10, bg="white", highlightthickness=0)
+        addr = tk.Entry(box, font=("Segoe UI", 13, "bold"), width=36, relief="flat", readonlybackground=C["panel2"],
+                        fg=C["fg"], justify="center")
+        note = ttk.Label(box, wraplength=440, justify="left", style="BgMut.TLabel", text="")
+        btns = ttk.Frame(box)
+        onoff = ttk.Button(btns, text="")
+        copy_b = ttk.Button(btns, text="Copy address")
+        test_b = ttk.Button(btns, text="Test on this PC")
+
+        def close():
+            self._phone_dlg = None
+            dlg.destroy()
+
+        def set_on(on):
+            self.cfg["second_screen"] = bool(on)
+            if "second_screen" in self.vars:
+                self.vars["second_screen"].set(bool(on))
+            save_config(self.cfg)
+            self._apply_second_screen()
+            show()
+
+        def show():
+            url = self.screen.url() if self.screen.running() else ""
+            for w in (qr, addr, note):
+                w.pack_forget()
+            if url:
+                steps.configure(text="1.  Connect the phone or tablet to the same Wi-Fi as this PC.\n"
+                                     "2.  Scan the code with its camera, or type the address into its browser.\n"
+                                     "3.  Start coaching. Tip: add the page to the home screen for full screen.")
+                try:
+                    import segno
+                    m = [list(row) for row in segno.make(url, error="m").matrix]
+                    cell, pad = max(4, 232 // (len(m) + 8)), 4
+                    size = (len(m) + 2 * pad) * cell
+                    qr.configure(width=size, height=size)
+                    qr.delete("all")
+                    for y, row in enumerate(m):
+                        for x, v in enumerate(row):
+                            if v:
+                                qr.create_rectangle((x + pad) * cell, (y + pad) * cell, (x + pad + 1) * cell,
+                                                    (y + pad + 1) * cell, fill="black", outline="")
+                    qr.pack(pady=(12, 8))
+                except Exception:
+                    pass                              # no QR code part installed yet: the address still works
+                addr.configure(state="normal")
+                addr.delete(0, "end")
+                addr.insert(0, url)
+                addr.configure(state="readonly")
+                addr.pack(pady=(4, 6), ipady=6)
+                note.configure(text="Page doesn't load? The first time, Windows asks to allow SimCoach on private "
+                                    "networks: choose Allow. The phone must be on the same Wi-Fi (not mobile data or "
+                                    "a guest network). The address is private to you: it stays the same until you "
+                                    "reinstall.")
+                onoff.configure(text="Turn off", command=lambda: set_on(False))
+                copy_b.configure(state="normal", command=lambda: (self.root.clipboard_clear(),
+                                                                  self.root.clipboard_append(url)))
+                test_b.configure(state="normal", command=lambda: self._open(
+                    f"http://127.0.0.1:{self.screen.port}/{self.screen.token}/"))
+            else:
+                failed = bool(self.cfg.get("second_screen"))
+                steps.configure(text=(f"Couldn't start it: port {self.cfg.get('second_screen_port', 8765)} is in use "
+                                      f"by another program. Close that program, or change second_screen_port in "
+                                      f"SimCoach's config.json, then turn it on again." if failed else
+                                      "It's off. Turn it on to get the address and a code to scan."))
+                note.configure(text="")
+                onoff.configure(text="Turn on", command=lambda: set_on(True))
+                copy_b.configure(state="disabled")
+                test_b.configure(state="disabled")
+            note.pack(anchor="w", pady=(4, 0))
+            btns.pack_forget()
+            btns.pack(fill="x", pady=(14, 0))
+        onoff.pack(side="left")
+        copy_b.pack(side="left", padx=8)
+        test_b.pack(side="left")
+        ttk.Button(btns, text="Close", command=close).pack(side="right")
+        dlg.protocol("WM_DELETE_WINDOW", close)
+        if not self.cfg.get("second_screen"):
+            set_on(True)                              # opening this is asking for it
+        else:
+            self._apply_second_screen()
+            show()
 
     def _apply_second_screen(self):
         if self.cfg.get("second_screen"):

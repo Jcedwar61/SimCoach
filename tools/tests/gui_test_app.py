@@ -174,6 +174,31 @@ def run():
         app._lib_index = {LAPNAME: sc.git_blob_sha(open(os.path.join(sc.BEST_DIR, LAPNAME), "rb").read())}
         app.load_best()
         check(app.best_tv.set(LAPNAME, "status") == "In the library ✓", "added: in the library")
+        # Phone screen button: the dialog shows the address and a QR code, and can switch it off and on
+        app.phone_screen_dialog()
+        pump(0.3)
+        dlg = app._phone_dlg
+
+        def kids(w):
+            for c in w.winfo_children():
+                yield c
+                yield from kids(c)
+        entries = [c for c in kids(dlg) if c.winfo_class() == "Entry" and c.winfo_manager()]
+        check(entries and entries[0].get() == app.screen.url() and app.screen.token in entries[0].get(),
+              "phone screen dialog shows the address")
+        qrs = [c for c in kids(dlg) if c.winfo_class() == "Canvas" and c.winfo_manager()]
+        check(qrs and len(qrs[0].find_all()) > 100, "with a QR code to scan")
+        btn = {c.cget("text"): c for c in kids(dlg) if c.winfo_class() == "TButton"}
+        btn["Turn off"].invoke()
+        pump(0.3)
+        check(not app.screen.running() and not cfg["second_screen"] and not app.vars["second_screen"].get(),
+              "Turn off stops it and unticks the setting")
+        btn = {c.cget("text"): c for c in kids(dlg) if c.winfo_class() == "TButton"}
+        btn["Turn on"].invoke()
+        pump(0.3)
+        check(app.screen.running() and saved.get("second_screen") is True, "Turn on starts it and saves the setting")
+        btn = {c.cget("text"): c for c in kids(dlg) if c.winfo_class() == "TButton"}
+        btn["Close"].invoke()
         app.vars["second_screen"].set(False)
         app.save_settings(quiet=True)
         pump()
