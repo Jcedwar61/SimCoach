@@ -67,7 +67,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.3"
+APP_VERSION = "6.4"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -96,7 +96,7 @@ DEFAULT_CONFIG = {
     "overlay_pedals": True,
     "overlay_locked": False,
     "overlay_pos": None,
-    "coach_personality": "apex",
+    "coach_personality": "mansell",
     "brake_callouts": "focus",
     "split_callouts": False,
     "auto_start": True,
@@ -109,7 +109,7 @@ DEFAULT_CONFIG = {
     "engineer_voice": "en-GB-ThomasNeural",
     "strategist_voice": "en-US-AndrewNeural",
     "spotter_voice": "en-AU-WilliamNeural",
-    "crew_updates": "every",
+    "crew_updates": "important",
     "crew_chatter": "normal",
     "crew_language": "clean",
     "spotter_swap": [],
@@ -117,6 +117,8 @@ DEFAULT_CONFIG = {
     "second_screen": False,
     "second_screen_port": 8765,
     "check_updates": True,
+    "briefing_mode": "daily",
+    "sheet_autopop": True,
     "update_skip": "",
 }
 RALLY_GAMES = {"EA WRC", "DiRT Rally 2.0", "AC Rally"}
@@ -341,9 +343,11 @@ def _sane_config(cfg):
     if cfg.get("brake_callouts") not in ("focus", "all", "off"):
         cfg["brake_callouts"] = "focus"
     if cfg.get("crew_updates") not in ("every", "every2", "important"):
-        cfg["crew_updates"] = "every"
+        cfg["crew_updates"] = DEFAULT_CONFIG["crew_updates"]
     if cfg.get("crew_chatter") not in ("off", "normal", "lots"):
         cfg["crew_chatter"] = "normal"
+    if cfg.get("briefing_mode") not in ("daily", "always", "off"):
+        cfg["briefing_mode"] = "daily"
     if cfg.get("crew_language") not in ("clean", "salty"):
         cfg["crew_language"] = "clean"
     sp = cfg.get("second_screen_port")
@@ -387,7 +391,7 @@ def load_config():
     if cfg.get("whisper_model") not in {v for _, v in WHISPER_MODELS}:
         cfg["whisper_model"] = DEFAULT_CONFIG["whisper_model"]
     if cfg.get("coach_personality") not in {"apex", "almeida", "mansell", "bentley", "perel", "naujoks"}:
-        cfg["coach_personality"] = "apex"
+        cfg["coach_personality"] = DEFAULT_CONFIG["coach_personality"]
     return cfg
 
 
@@ -2878,6 +2882,7 @@ class Voice:
         self.spot_q: "queue.Queue[tuple]" = queue.Queue()
         self._tls = threading.local()
         self.preempt = threading.Event()
+        self._cancel = set()
         self._deferred, self._resumes = [], []
         threading.Thread(target=self._run, daemon=True, name="voice").start()
         threading.Thread(target=self._synth_worker, daemon=True, name="voice-synth").start()
@@ -2924,6 +2929,7 @@ class Voice:
         """kind: 'cue', 'info', 'chat' (crew banter: cut short by any urgent call), 'answer', 'urgent', or 'spot'
         (spotter: jumps the queue and cuts in)."""
         self.log(f"{who}: {text}")
+        self._cancel.discard(text)
         if kind == "spot":
             self.spot_q.put((text, kind, time.monotonic(), voice))
             self.preempt.set()
@@ -3331,7 +3337,7 @@ class Voice:
                         self._drop_cue(text, vname)
                     return
                 if self._must_stop(spot):
-                    return None if (spot or self._is_chat()) else Voice.SPOT_FIRST
+                    return None if (spot or self._is_chat() or self._cancelled()) else Voice.SPOT_FIRST
                 with self._mlock:
                     pygame.mixer.music.load(path)
                     pygame.mixer.music.set_volume(float(self.cfg.get("volume", 0.9)))
@@ -3347,7 +3353,7 @@ class Voice:
                 with self._mlock:
                     pygame.mixer.music.unload()
                 self._last_spoke_end = time.monotonic()
-                if cut and self._item and self._item[1] == "urgent":
+                if cut and self._item and self._item[1] == "urgent" and not self._cancelled():
                     return Voice.SPOT_FIRST
                 return
             except Exception as e:
@@ -3358,7 +3364,7 @@ class Voice:
                     self._drop_cue(text, vname)
                 return
             if self._must_stop(spot):
-                return None if (spot or self._is_chat()) else Voice.SPOT_FIRST
+                return None if (spot or self._is_chat() or self._cancelled()) else Voice.SPOT_FIRST
             try:
                 self._started("Windows voice (neural voice unreachable)")
                 spot = bool(self._item and self._item[1] == "spot")
@@ -3367,7 +3373,7 @@ class Voice:
                     if self._must_stop(spot):
                         self._sapi.Speak("", 3)
                         self._last_spoke_end = time.monotonic()
-                        if self._item and self._item[1] == "urgent":
+                        if self._item and self._item[1] == "urgent" and not self._cancelled():
                             return Voice.SPOT_FIRST
                         break
                 self._last_spoke_end = time.monotonic()
@@ -3379,9 +3385,40 @@ class Voice:
     def _is_chat(self):
         return bool(self._item and self._item[1] == "chat")
 
+    def _cancelled(self):
+        return bool(self._item and self._item[0] in self._cancel)
+
+    def cancel(self, texts):
+        """Drop these lines: from the queue, from lines waiting to resume, and the one playing now (it stops and
+        isn't resumed). Returns how many were dropped. Used by "skip the briefing"."""
+        texts = {t for t in texts if t}
+        if not texts:
+            return 0
+        n, span = 0, 0.0
+        with self.q.mutex:
+            keep = [it for it in self.q.queue if it[0] not in texts]
+            for it in self.q.queue:
+                if it[0] in texts:
+                    span += self.duration(it[0]) + self.latency(it[0], it[3]) + GAP_AFTER_TALK
+            n += len(self.q.queue) - len(keep)
+            self.q.queue.clear()
+            self.q.queue.extend(keep)
+        for lst in (self._resumes, self._deferred):
+            before = len(lst)
+            lst[:] = [it for it in lst if it[0] not in texts]
+            n += before - len(lst)
+        self._cancel = texts
+        if self._item and self._item[0] in texts:
+            n += 1
+        self.busy_until = max(self._last_spoke_end + GAP_AFTER_TALK, self.busy_until - span)
+        return n
+
     def _must_stop(self, spot):
         """Stop (or don't start) the current line: push-to-talk is held, a spotter call is waiting, or this is crew
-        banter and an urgent call (box, flags, damage...) is queued behind it: banter never holds those up."""
+        banter and an urgent call (box, flags, damage...) is queued behind it: banter never holds those up.
+        A line cancelled by "skip the briefing" stops too."""
+        if self._cancelled():
+            return True
         if self.hold.is_set():
             return True
         if spot:
@@ -4158,6 +4195,8 @@ class Lap:
         self.shift_ratios = []
         self.limiter_time = 0.0
         self.max_press = self.min_press = None
+        self.ctx_yellow = False          # a yellow / safety car at any point in the lap
+        self.ctx_traffic_s = 0.0         # seconds spent right behind or alongside another car
         self._prev_gear = None
         self._prev_rpm = 0.0
         self._prev_t = None
@@ -4584,6 +4623,7 @@ class Coach:
         self.reset_session()
 
     def reset_session(self):
+        self._since_pit = 0
         self._rs = self._new_start_state()
         self.last_start = None
         self.drill = None
@@ -5150,6 +5190,21 @@ class Coach:
                            "wheelspin_s": round(rs["spin"], 2)}
         self.say("Start review. " + " ".join(bits), now, force=True)
 
+    def _note_lap_context(self, f, now):
+        """Things that cost time but aren't the driver's fault: traffic and yellow flags (per lap, and right now)."""
+        prev, self._ctx_t = getattr(self, "_ctx_t", None), now
+        dt = 0.0 if prev is None else max(0.0, min(0.5, now - prev))
+        ca = f.car_ahead if isinstance(f.car_ahead, dict) else {}
+        dist = ca.get("distance_m")
+        close = f.speed > 30 and (bool(f.others) or (dist is not None and dist < 30)
+                                  or (f.session == "race" and f.gap_ahead is not None and f.gap_ahead < 0.8))
+        yellow = f.flag in ("yellow", "fcy", "sc", "vsc")
+        self._traffic_now, self._yellow_now = close, yellow
+        if yellow:
+            self.lap.ctx_yellow = True
+        if close:
+            self.lap.ctx_traffic_s += dt
+
     def theoretical_best(self):
         """Your best lap with every corner replaced by your best-ever run through that corner."""
         if not self.ref or self.best_time is None:
@@ -5251,6 +5306,7 @@ class Coach:
             self._race_start(f, now)
         except Exception as e:
             file_log(f"Race start coaching: {type(e).__name__}: {e}")
+        self._note_lap_context(f, now)
         if self._sheet_wait is not None:
             sh = self.last_setup_sheet
             racing = (f.session == "race" or f.game in RALLY_GAMES) and (f.laps_done >= 1 or (f.speed > 50 and not f.in_pit))
@@ -5543,6 +5599,8 @@ class Coach:
             spoken.add(ci)
             if self.drill and ci != self.drill["ci"]:
                 continue
+            if getattr(self, "_traffic_now", False) or getattr(self, "_yellow_now", False):
+                continue                          # held up or under a yellow: not the driver's fault
             if self.lap.pit or ci not in self.best_corner or self.lap.has_off_in(w0, w1) or not self.lap.observed(w0, w1):
                 continue
             filled = self.lap.filled_window(w0, w1)
@@ -5560,14 +5618,17 @@ class Coach:
                     cnt = self.issue_counts[ci].get(reason, 0) + 1
                     self.issue_counts[ci][reason] = cnt
                     self._state_rev += 1
-                    spoken_reason = self._unhinged_flair(ci, m, best, reason, loss, cnt)
-                    self.say(f"{self.turn(ci)}, {tenths(loss)} lost. {spoken_reason}", now)
+                    minor = (self.cfg.get("talk_level", 1) < 2 and ci not in self._focus_cis and loss < 0.3
+                             and not (self.drill and ci == self.drill["ci"]))
+                    if not minor:                 # normal talk level: focus corners, or a big loss anywhere
+                        spoken_reason = self._unhinged_flair(ci, m, best, reason, loss, cnt)
+                        self.say(f"{self.turn(ci)}, {tenths(loss)} lost. {spoken_reason}", now)
             elif loss < -0.05 and (self.cfg.get("talk_level", 1) >= 2 or ci in self._focus_cis):
                 self.say(f"Mega through {self.turn(ci)}, fastest yet.", now)
 
     def _unhinged_flair(self, ci, m, best, reason, loss, cnt):
         """Inject a bit of unhinged coach energy on mistakes while keeping the technical diagnosis crystal clear."""
-        style = self.cfg.get("coach_personality", "apex")
+        style = self.cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"])
         if style in ("mansell", "bentley", "perel", "naujoks"):
             return reason
         if m.get("lock"):
@@ -5643,7 +5704,8 @@ class Coach:
         return max(opts, key=lambda o: o[0])[1] if opts else None
 
     def collaborate_race_setup(self, f: Optional[Frame], now: float, speak: bool = True,
-                               use_openai: bool = True, user_query: str = "", show: bool = False) -> tuple[str, str]:
+                               use_openai: bool = True, user_query: str = "", show: bool = False,
+                               session_start: bool = False) -> tuple[str, str]:
         """Before the race begins (or when requested), the Strategist and Coach work together to recommend
         an optimal setup for the race based on track geometry, weather/rain, race length, fuel, tyre temps/pressures,
         and the driver's telemetry tendencies. Uses the chosen AI provider when an API key is configured, with built-in fallback."""
@@ -5770,7 +5832,7 @@ class Coach:
             )
             all_issues = (self.pre_race_notes.get("issues", "") + " "
                           + " ".join(k for d in self.issue_counts.values() for k in d.keys())).lower()
-            unhinged = self.cfg.get("coach_personality", "apex") in ("apex", "almeida")
+            unhinged = self.cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"]) in ("apex", "almeida")
 
             mech_bits = []
             if rain >= 0.25:
@@ -5870,12 +5932,19 @@ class Coach:
             api_key = ai_key(self.cfg)
             is_test_sim = (sim_name == "TEST")
 
+        # The session-start sheet: forced open (even on the move) before the first lap is done, unless the
+        # driver switched the automatic pop-up off, in which case it's only kept for the overlay's SETUP button.
+        autopop = bool(self.cfg.get("sheet_autopop", True))
+        lf_s = f or self.last_frame
+        if session_start and autopop and (lf_s is None or lf_s.laps_done == 0):
+            show = True
+        pop = "never" if (session_start and not autopop) else "auto"
         if use_openai and api_key and not (speak and is_test_sim):
             if speak:
                 threading.Thread(
                     target=self._openai_setup_worker,
                     args=(api_key, setup_ctx, strat_line, coach_line, now, time.monotonic(),
-                          (self.key, self.session_id), sheet, show),
+                          (self.key, self.session_id), sheet, show, pop, session_start),
                     daemon=True,
                     name="openai-race-setup",
                 ).start()
@@ -5883,13 +5952,13 @@ class Coach:
             s_ai, c_ai, src, ai_items = self._fetch_openai_setup(api_key, setup_ctx, strat_line, coach_line)
             with self.lock:
                 self.last_setup_briefing = {"strategist": s_ai, "coach": c_ai, "source": src}
-            self._publish_setup_sheet(self._ai_sheet(sheet, s_ai, c_ai, src, ai_items), force=show)
+            self._publish_setup_sheet(self._ai_sheet(sheet, s_ai, c_ai, src, ai_items), force=show, popup=pop)
             return s_ai, c_ai
 
         if speak:
-            self._speak_setup_pair(strat_line, coach_line, now, sheet, force=show)
+            self._speak_setup_pair(strat_line, coach_line, now, sheet, force=show, popup=pop, start=session_start)
         else:
-            self._publish_setup_sheet(sheet, force=show)
+            self._publish_setup_sheet(sheet, force=show, popup=pop)
         return strat_line, coach_line
 
     @staticmethod
@@ -5903,7 +5972,7 @@ class Coach:
         out["applied"] = set()
         return out
 
-    def _publish_setup_sheet(self, sheet, force=False):
+    def _publish_setup_sheet(self, sheet, force=False, popup="auto"):
         """Keep the sheet, save it as text next to the reports, and show it (the app opens the pop-up).
         force: the driver asked to see it (button / "show the setup sheet"), so it opens even on the move."""
         if not sheet:
@@ -5930,6 +5999,11 @@ class Coach:
                 sheet["path"] = path
         except OSError as e:
             self.log(f"Couldn't save the setup sheet: {e}")
+        if popup == "never":                 # automatic pop-up switched off: ready behind the SETUP button
+            with self.lock:
+                self._sheet_wait = None
+            self.overlay.post(setup_sheet=sheet, setup_popup=False)
+            return
         lf = self.last_frame
         moving = not force and lf is not None and self.live() and lf.speed > 3
         with self.lock:
@@ -5938,13 +6012,14 @@ class Coach:
             self.log("Setup sheet ready. It opens when you stop in the pits, or say \"show the setup sheet\".")
         self.overlay.post(setup_sheet=sheet, setup_popup=not moving)
 
-    def _speak_setup_pair(self, strat_line: str, coach_line: str, now: float, sheet=None, force=False):
+    def _speak_setup_pair(self, strat_line: str, coach_line: str, now: float, sheet=None, force=False, popup="auto",
+                          start=False):
         crew = self.crew
         if crew and crew.on("strategist"):
             # The session-start briefing is a priority call: it goes ahead of intros and banter and never
             # expires from the queue, so it's always heard. Briefings asked for later queue as normal.
-            crew.say("strategist", strat_line, now, urgent=force)
-            crew.say("coach", coach_line, now, urgent=force)
+            crew.say("strategist", strat_line, now, urgent=start)
+            crew.say("coach", coach_line, now, urgent=start)
         else:
             self.say(strat_line, now, force=True)
             self.say(coach_line, now, force=True)
@@ -5954,14 +6029,14 @@ class Coach:
         # The session-start sheet opens even on the move (it never takes focus from the game), as long as the
         # first lap hasn't been completed yet; one that arrives later waits for a stop as before.
         lf = self.last_frame
-        self._publish_setup_sheet(sheet, force=bool(force and (lf is None or lf.laps_done == 0)))
+        self._publish_setup_sheet(sheet, force=bool(force and (lf is None or lf.laps_done == 0)), popup=popup)
 
     def _fetch_openai_setup(self, api_key: str, setup_ctx: dict,
                             fallback_strat: str, fallback_coach: str) -> tuple:
         """Ask the chosen AI for a race-specific Strategist + Coach setup briefing tailored to the car, track,
         weather, race length, and driver telemetry."""
         driver = self.cfg.get("driver_name") or "the driver"
-        p_key = self.cfg.get("coach_personality", "apex")
+        p_key = self.cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"])
         coach_persona = COACH_PERSONA_PROMPTS.get(p_key, COACH_PERSONA_PROMPTS["apex"]).format(name=driver)
         sys_msg = (
             f"You are coordinating a pre-race setup briefing over team radio for {driver} between two people:\n"
@@ -6000,7 +6075,8 @@ class Coach:
             return fallback_strat, fallback_coach, "built-in (fallback)", None
 
     def _openai_setup_worker(self, api_key: str, setup_ctx: dict, fallback_strat: str, fallback_coach: str,
-                             start_now: float, start_mono: float, sess=None, sheet=None, show=False):
+                             start_now: float, start_mono: float, sess=None, sheet=None, show=False, pop="auto",
+                             start=False):
         s_out, c_out, src, ai_items = self._fetch_openai_setup(api_key, setup_ctx, fallback_strat, fallback_coach)
         with self.lock:
             if sess is not None and sess != (self.key, self.session_id):
@@ -6009,11 +6085,13 @@ class Coach:
             self.last_setup_briefing = {"strategist": s_out, "coach": c_out, "source": src}
         cur_now = start_now + max(0.0, time.monotonic() - start_mono)
         self._speak_setup_pair(s_out, c_out, cur_now, self._ai_sheet(sheet, s_out, c_out, src, ai_items) if sheet else None,
-                               force=show)
+                               force=show, popup=pop, start=start)
 
     def finish_lap(self, lap_time, now):
         lap = self.lap
         self.lap_no += 1
+        since_pit = getattr(self, "_since_pit", 0)
+        self._since_pit = 0 if lap.pit else since_pit + 1
         if lap.max_temp is not None or lap.max_press is not None:
             self._last_tyre = (lap.max_temp, lap.min_temp, lap.max_press, lap.min_press)
         f = self.last_frame
@@ -6087,7 +6165,7 @@ class Coach:
             if corner_pb:
                 self.save()
             nxt = f" Next lap, {self.turn(self.focus[0][0])}: {self.focus[0][1]}" if self.focus else ""
-            unhinged_inv = self.cfg.get("coach_personality", "apex") in ("apex", "almeida")
+            unhinged_inv = self.cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"]) in ("apex", "almeida")
             inv_msg = ("Lap invalid — we're circuit racing, not mowing the lawn! Keep it between the white lines."
                        if unhinged_inv else "Lap invalid, not counted for your best.") + nxt
             self.say(inv_msg, now, force=True)
@@ -6191,52 +6269,65 @@ class Coach:
             or (f.session == "race" and f.race_laps > 0 and f.laps_done >= f.race_laps)
             or (f.session == "race" and f.time_left is not None and f.time_left <= 0.0)
         ))
-        unhinged = self.cfg.get("coach_personality", "apex") in ("apex", "almeida")
+        unhinged = self.cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"]) in ("apex", "almeida")
+        chatty = self.cfg.get("talk_level", 1) >= 2
+        excuse = ("there was a yellow flag" if lap.ctx_yellow else
+                  "you were held up in traffic" if lap.ctx_traffic_s >= 2.0 else
+                  "the tyres were still coming in" if since_pit == 0 else None)
         parts = [f"{fmt_time(lap_time)}."]
         if pb:
             parts.append(f"Purple lap! New personal best, {tenths(delta)} quicker.")
+        elif excuse and delta >= 0.3:
+            parts.append(f"{tenths(delta)} off your best, but {excuse}, so don't read anything into that one.")
         elif delta >= 1.2 and unhinged:
             parts.append(f"{tenths(delta)} off your best — what on earth was that lap?! Breathe, reset your eyes, and stop overdriving.")
         else:
             parts.append(f"{tenths(delta)} off your best.")
-        if improved and (pb or delta <= 0.6) and not drill_msg:
+        if improved and (pb or delta <= 0.6) and not drill_msg and chatty:
             parts.append(f"Gained most in {self.turn(max(improved)[1])}.")
         if will_finish_race:
             self.say(" ".join(parts), now, force=True)
             self._set_focus(self.focus)
             return
+        # one coaching point
         if drill_msg:
             parts.append(drill_msg)
-        elif self.focus:
+        elif self.focus and not excuse:
             ci, tip = self.focus[0]
             parts.append(f"Next lap, isolate {self.turn(ci)}: {tip}")
-        elif not pb:
+        elif not pb and chatty:
             parts.append("Repeatable inputs. Keep stacking clean laps.")
+        # extras: all of them when Chatty; otherwise at most one, every other lap, and never on an excused lap
+        extras = []
         if len(lap.shift_ratios) >= 3:
             med = sorted(lap.shift_ratios)[len(lap.shift_ratios) // 2]
             if med < 0.86:
-                parts.append("You're short-shifting like you're driving a school bus — wind out the rev range!"
-                             if unhinged else "You're short shifting, use more of the rev range.")
+                extras.append("You're short-shifting like you're driving a school bus — wind out the rev range!"
+                              if unhinged else "You're short shifting, use more of the rev range.")
         if lap.limiter_time > 1.5:
-            parts.append("You're bouncing off the limiter — the engine is begging for mercy, shift earlier!"
-                         if unhinged else "You're sitting on the limiter, shift a touch earlier.")
+            extras.append("You're bouncing off the limiter — the engine is begging for mercy, shift earlier!"
+                          if unhinged else "You're sitting on the limiter, shift a touch earlier.")
         times = [h["time"] for h in self.history[-5:] if not h.get("pit") and not h.get("invalid")]
         if len(times) >= 4 and self.lap_no % 4 == 0:
             sd = stdev(times)
-            parts.append(f"Consistency is {'metronomic' if sd < 0.4 else 'all over the place — settle your markers'}, laps within {tenths(sd)}."
-                         if unhinged else f"Consistency is {'good' if sd < 0.4 else 'patchy'}, laps within {tenths(sd)}.")
+            extras.append(f"Consistency is {'metronomic' if sd < 0.4 else 'all over the place — settle your markers'}, laps within {tenths(sd)}."
+                          if unhinged else f"Consistency is {'good' if sd < 0.4 else 'patchy'}, laps within {tenths(sd)}.")
         crew_eng = self.crew is not None and self.crew.on("engineer")
         if lap.max_press and lap.min_press and self.key and self.key[0] == "ACC" and not crew_eng:
             if lap.max_press > 28.5:
-                parts.append("Tyre pressures are high, drop them in the next stop.")
+                extras.append("Tyre pressures are high, drop them in the next stop.")
             elif lap.min_press < 25.5 and self.lap_no > 3:
-                parts.append("Tyre pressures are low.")
+                extras.append("Tyre pressures are low.")
         if crew_eng:
             pass
         elif lap.max_temp and lap.max_temp > 105:
-            parts.append("Tyres are running hot, be smoother on entry.")
+            extras.append("Tyres are running hot, be smoother on entry.")
         elif lap.min_temp and lap.min_temp < 60 and self.lap_no > 2:
-            parts.append("Tyres are still cold, lean on them a bit more.")
+            extras.append("Tyres are still cold, lean on them a bit more.")
+        if chatty:
+            parts += extras
+        elif extras and not excuse and self.lap_no % 2 == 0:
+            parts.append(extras[0])
         if f and f.game not in RALLY_GAMES and fuel_used > 0.2 and f.fuel / fuel_used < 2.5 and not crew_eng:
             n_fl = max(1, int(f.fuel / fuel_used))
             parts.append(f"Fuel for about {'one more lap' if n_fl == 1 else f'{n_fl} more laps'}.")
@@ -6367,7 +6458,7 @@ class Coach:
                         inc.append(f"{total_locks} brake {'lock-up' if total_locks == 1 else 'lock-ups'}")
                     if total_spins:
                         inc.append(f"{total_spins} exit {'wheelspin' if total_spins == 1 else 'wheelspins'}")
-                    unhinged_d = self.cfg.get("coach_personality", "apex") in ("apex", "almeida")
+                    unhinged_d = self.cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"]) in ("apex", "almeida")
                     parts.append(
                         f"On car control, we logged {' and '.join(inc)} over the race — stop treating the pedals like on-off switches and let the tyres live!"
                         if unhinged_d else
@@ -6468,7 +6559,7 @@ class Coach:
                 "tyre_core_temps_c": [round(x) for x in f.tyre_temps] if f and f.tyre_temps else None,
                 "track_length_m": self.track_len,
                 "lap_time_consistency_s": round(stdev([h["time"] for h in self.history[-6:] if not h.get("pit") and not h.get("invalid")] or [h["time"] for h in self.history[-6:]]), 3),
-                "coach_personality": self.cfg.get("coach_personality", "apex"),
+                "coach_personality": self.cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"]),
                 "recommended_race_setup": self.last_setup_briefing,
                 "setup_sheet": [" ".join(x for x in it if x) for it in (self.last_setup_sheet or {}).get("items", [])] or None,
                 "applied_setup": self.applied_setup,
@@ -6488,6 +6579,7 @@ CREW_ROLES = [("engineer", "Race engineer", "en-GB-ThomasNeural"),
 _CREW_DEFAULT_VOICES = {r: v for r, _, v in CREW_ROLES}
 _ROLE_ON = {r: f"{r}_on" for r, _, _ in CREW_ROLES}
 WHEELS = ["front left", "front right", "rear left", "rear right"]
+BRIEFING_MODES = [("Full once a day, then short", "daily"), ("Full every session", "always"), ("Off (sheet only)", "off")]
 CREW_UPDATES = [("Every lap", "every"), ("Every 2 laps", "every2"), ("Important calls only", "important")]
 CREW_CHATTER = [("Off", "off"), ("Normal", "normal"), ("Lots", "lots")]
 CREW_LANGUAGE = [("Clean", "clean"), ("Salty (swearing, slang)", "salty")]
@@ -6833,7 +6925,7 @@ class Crew:
 
     def every(self):
         """Post-lap reports: every lap (default), every 2 laps, or important calls only."""
-        return {"every": 1, "every2": 2, "important": 0}.get(self.cfg.get("crew_updates", "every"), 1)
+        return {"every": 1, "every2": 2, "important": 0}.get(self.cfg.get("crew_updates", DEFAULT_CONFIG["crew_updates"]), 1)
 
     def _new_race(self, f):
         """A new session or a restarted race: clear the per-race calls, keep what we learned about fuel and pace."""
@@ -7047,20 +7139,54 @@ class Crew:
             self.say("engineer", f"Good stint out there.{best_txt} Bring her back to the pits.", now)
         self.chatter("strategist", "finish", self.facts(f), now, force=True, reaction=True)
 
+    def _first_session_today(self, f):
+        """True for the first session today with this car at this track (and remembers it)."""
+        d = self.cfg.get("briefed")
+        if not isinstance(d, dict):
+            d = self.cfg["briefed"] = {}
+        key, today = f"{f.game}|{f.track}|{f.car}", time.strftime("%Y-%m-%d")
+        if d.get(key) == today:
+            return False
+        for k in [k for k, v in d.items() if v != today]:
+            d.pop(k, None)
+        d[key] = today
+        if f.game != "TEST":
+            save_config(self.cfg)
+        return True
+
     def intros(self, f, now):
+        """Session start. The first session today with this car and track gets the lot: intros, the full strategist +
+        coach setup briefing and the sheet. Later sessions get one short strategist line (say "full briefing" for
+        the rest) and the sheet, without repeating the intros and banter."""
         fx = self.facts(f)
         track, car = fx["track"], fx["car"]
-        self.say("engineer", f"Engineer on the radio. The {car} is ready to go. I'll keep you posted on fuel, tyres and damage.", now)
+        mode = self.cfg.get("briefing_mode", "daily")
+        full = self._first_session_today(f) or mode == "always"
+        self._short_lines = ()
+        if full:   # short, and goes first so the briefing that follows has some context
+            self.say("engineer", f"Engineer on the radio. The {car} is ready to go. I'll keep you posted on fuel, tyres and damage.",
+                     now, urgent=True)
         if self.coach is not None:
-            # Every session type (practice, qualifying, race, hotlap, rally stage): the strategist + coach setup
-            # briefing, and the setup sheet pops up.
-            self.coach.collaborate_race_setup(f, now, speak=True, show=True)
+            if full and mode != "off":
+                self.coach.collaborate_race_setup(f, now, speak=True, session_start=True)
+            else:
+                self.coach.collaborate_race_setup(f, now, speak=False, use_openai=False, session_start=True)
+                if mode != "off":
+                    sh = self.coach.last_setup_sheet or {}
+                    fuel = next((f"{st.lower()} {ch}" for ar, st, ch in sh.get("items") or [] if ar == "Fuel" and st), None)
+                    where = "on your screen" if self.cfg.get("sheet_autopop", True) else "on the overlay's setup button"
+                    line = (f"Same plan as your earlier session here{f', {fuel}' if fuel else ''}. "
+                            f"Setup sheet's {where}. Say full briefing for the rest.")
+                    self._short_lines = (line,)
+                    self.say("strategist", line, now, urgent=True)
         elif f.session == "race":
             mins = max(1, round(f.time_left / 60)) if f.time_left else 0
             length = (_say_laps(f.race_laps) if f.race_laps else
                       ("1 minute" if mins == 1 else f"{mins} minutes") if f.time_left else "this race")
             grid = f" You start P{f.position}" + (f" of {f.cars}." if f.cars else ".") if f.position else ""
             self.say("strategist", f"Strategist here. {length} at {track}.{grid} I'll call positions, gaps and the plan.", now)
+        if not full:
+            return
         if f.session in ("practice", "qualifying"):
             self.say("strategist", f"Strategist here. I'll track your times and position this {f.session}.", now)
         if f.game not in RALLY_GAMES:
@@ -8007,9 +8133,9 @@ svg{{width:100%;height:auto;border:1px solid var(--line);border-radius:10px}} .b
 
 # The keys are the saved setting (kept for existing configs); the labels describe a coaching style.
 COACH_PERSONALITIES = [
-    ("Apex — All-round pro, roasts your mistakes (Default)", "apex"),
+    ("Apex — All-round pro, roasts your mistakes", "apex"),
     ("Rotation — Weight transfer, one skill at a time", "almeida"),
-    ("Composed — Calm, corner-phase pro", "mansell"),
+    ("Composed — Calm, corner-phase pro (Default)", "mansell"),
     ("Feel — Sensory, traction circle, no coasting", "bentley"),
     ("Exit — GT racer, exit speed & delta", "perel"),
     ("Data — Surgical telemetry engineer", "naujoks"),
@@ -8074,7 +8200,7 @@ Rules:
 
 def build_system_prompt(cfg):
     name = cfg.get("driver_name") or "the driver"
-    p_key = cfg.get("coach_personality", "apex")
+    p_key = cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"])
     persona = COACH_PERSONA_PROMPTS.get(p_key, COACH_PERSONA_PROMPTS["apex"]).format(name=name)
     return SYSTEM_PROMPT.format(persona=persona, name=name)
 
@@ -9021,6 +9147,8 @@ class Conversation:
     _NUM_WORDS.update({"won": 1, "to": 2, "too": 2, "for": 4, "tree": 3, "ate": 8})
     _RE_DRILL = re.compile(r"\b(?:work on|practi[cs]e|drill|focus on)\s+(?:turn|corner|t)\s*([a-z0-9]+)"
                            r"(?:\s+(?:for\s+)?(?:the\s+next\s+)?([a-z0-9]+)\s+laps?)?")
+    _RE_BRIEF_SKIP = re.compile(r"\b(?:skip|stop|cancel|cut|enough of)\s+(?:the\s+|that\s+|this\s+)?(?:setup\s+)?briefing\b")
+    _RE_BRIEF_FULL = re.compile(r"\b(?:full|whole|complete)\s+(?:setup\s+)?briefing\b|\b(?:repeat|replay)\s+the\s+(?:setup\s+)?briefing\b")
     _RE_DRILL_STOP = re.compile(r"\b(?:stop|end|cancel|finish|quit)\s+(?:the\s+|this\s+|my\s+)?(?:drill|practice drill)\b")
 
     def _num(self, w):
@@ -9036,6 +9164,17 @@ class Conversation:
         t = t.strip().lower().rstrip(".!?")
         if len(t.split()) > 10:
             return None
+        if self._RE_BRIEF_SKIP.search(t):
+            b = c.last_setup_briefing or {}
+            n = self.voice.cancel([b.get("strategist"), b.get("coach")] + list(getattr(c.crew, "_short_lines", ())))
+            return "Copy, skipping it. The sheet's on the setup button." if n else "Nothing to skip."
+        if self._RE_BRIEF_FULL.search(t):
+            if c.last_frame is None:
+                return "Get in the car first, then ask for the briefing."
+            # asked for, so it's answered straight away (priority, like the session-start briefing)
+            threading.Thread(target=c.collaborate_race_setup, args=(c.last_frame, time.monotonic()),
+                             kwargs={"speak": True, "session_start": True}, daemon=True, name="full-briefing").start()
+            return ""
         if self._RE_DRILL_STOP.search(t):
             return c.stop_drill()
         m_dr = self._RE_DRILL.search(t)
@@ -10634,7 +10773,7 @@ class App:
         row(cg, 0, "How much it talks", lv)
         pnames = _PERSONALITY_NAMES
         self.vars["coach_personality"] = tk.StringVar(
-            value=_LABEL_BY_PERSONALITY.get(self.cfg.get("coach_personality", "apex"), pnames[0])
+            value=_LABEL_BY_PERSONALITY.get(self.cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"]), pnames[0])
         )
         row(cg, 1, "Coach personality",
             ttk.Combobox(cg, textvariable=self.vars["coach_personality"], values=pnames, state="readonly", width=44))
@@ -10686,14 +10825,18 @@ class App:
             self.vars[f"{role}_voice"] = tk.StringVar(value=_LABEL_BY_VOICE.get(cur, vnames[0]))
             ttk.Combobox(crg, textvariable=self.vars[f"{role}_voice"], values=vnames, state="readonly",
                          width=24).grid(row=r_, column=1, sticky="w", padx=8, pady=3)
-        for r_, (label, key, opts, default) in enumerate((("Lap reports", "crew_updates", CREW_UPDATES, "every"),
+        for r_, (label, key, opts, default) in enumerate((("Lap reports", "crew_updates", CREW_UPDATES, DEFAULT_CONFIG["crew_updates"]),
                                                           ("Chatter", "crew_chatter", CREW_CHATTER, "normal"),
-                                                          ("Language", "crew_language", CREW_LANGUAGE, "clean"))):
+                                                          ("Language", "crew_language", CREW_LANGUAGE, "clean"),
+                                                          ("Setup briefing", "briefing_mode", BRIEFING_MODES, "daily"))):
             ttk.Label(crg, text=label, style="Card.TLabel").grid(row=r_, column=2, sticky="w", padx=(14, 6), pady=3)
             self.vars[key] = tk.StringVar(value=dict((v, k) for k, v in opts).get(self.cfg.get(key, default),
                                                                                     dict((v, k) for k, v in opts)[default]))
             ttk.Combobox(crg, textvariable=self.vars[key], values=[k for k, _ in opts], state="readonly",
                          width=20).grid(row=r_, column=3, sticky="w", pady=3)
+        self.vars["sheet_autopop"] = tk.BooleanVar(value=bool(self.cfg.get("sheet_autopop", True)))
+        ttk.Checkbutton(rc, text="Open the setup sheet at the start of each session",
+                        variable=self.vars["sheet_autopop"]).pack(anchor="w", pady=(6, 0))
         ttk.Label(rc, text="Spotter calls the wrong side? Swap left/right in:", style="Card.TLabel").pack(anchor="w", pady=(8, 0))
         sw = ttk.Frame(rc, style="Card.TFrame")
         sw.pack(anchor="w", pady=(2, 0))
@@ -11266,7 +11409,7 @@ class App:
         mic = v["mic"].get()
         self.cfg["mic"] = "" if mic == "Windows default" else mic
         self.cfg["talk_level"] = self.talk_pref = int(v["talk_level"].get())
-        self.cfg["coach_personality"] = _PERSONALITY_BY_LABEL.get(v["coach_personality"].get(), "apex")
+        self.cfg["coach_personality"] = _PERSONALITY_BY_LABEL.get(v["coach_personality"].get(), DEFAULT_CONFIG["coach_personality"])
         self.cfg["brake_callouts"] = v["brake_callouts"].get()
         self.cfg["split_callouts"] = bool(v["split_callouts"].get())
         self.cfg["auto_start"] = bool(v["auto_start"].get())
@@ -11274,9 +11417,11 @@ class App:
             self.cfg[f"{role}_on"] = bool(v[f"{role}_on"].get())
             self.cfg[f"{role}_voice"] = _VOICE_BY_LABEL.get(v[f"{role}_voice"].get(), _dv)
         self.cfg["spotter_swap"] = [g for g in SPOTTER_GAMES if v[f"swap_{g}"].get()]
-        self.cfg["crew_updates"] = _UPDATES_BY_LABEL.get(v["crew_updates"].get(), "every")
+        self.cfg["crew_updates"] = _UPDATES_BY_LABEL.get(v["crew_updates"].get(), DEFAULT_CONFIG["crew_updates"])
         self.cfg["crew_chatter"] = _CHATTER_BY_LABEL.get(v["crew_chatter"].get(), "normal")
         self.cfg["crew_language"] = _LANGUAGE_BY_LABEL.get(v["crew_language"].get(), "clean")
+        self.cfg["briefing_mode"] = dict(BRIEFING_MODES).get(v["briefing_mode"].get(), "daily")
+        self.cfg["sheet_autopop"] = bool(v["sheet_autopop"].get())
         self.cfg["udp_share_simhub"] = bool(v["udp_share_simhub"].get())
         self.cfg["second_screen"] = bool(v["second_screen"].get())
         self.cfg["check_updates"] = bool(v["check_updates"].get())
