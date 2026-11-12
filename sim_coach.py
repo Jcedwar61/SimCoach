@@ -67,7 +67,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.7"
+APP_VERSION = "6.7.1"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -10968,7 +10968,8 @@ def _gh_call(method, url, token=None, body=None, form=None, timeout=20.0):
             raw = r.read()
     except urllib.error.HTTPError as e:
         try:
-            msg = json.loads(e.read().decode("utf-8")).get("message") or e.reason
+            err = json.loads(e.read().decode("utf-8"))
+            msg = err.get("message") or err.get("error_description") or err.get("error") or e.reason
         except Exception:
             msg = e.reason
         raise GitHubError(f"GitHub said: {msg} ({e.code})", e.code) from None
@@ -10977,7 +10978,10 @@ def _gh_call(method, url, token=None, body=None, form=None, timeout=20.0):
 
 def github_device_start(client_id):
     """Start a sign-in: {"user_code", "verification_uri", "device_code", "interval", "expires_in"}."""
-    return _gh_call("POST", f"{GITHUB_WEB}/login/device/code", form={"client_id": client_id, "scope": "public_repo"})
+    d = _gh_call("POST", f"{GITHUB_WEB}/login/device/code", form={"client_id": client_id, "scope": "public_repo"})
+    if not d.get("user_code") or not d.get("device_code"):
+        raise GitHubError(d.get("error_description") or d.get("error") or "GitHub didn't give a sign-in code")
+    return d
 
 
 def github_device_poll(client_id, start, cancelled=lambda: False, sleep=time.sleep):
@@ -11047,10 +11051,30 @@ def upload_library_lap(token, name, data, title, repo=None, log=print):
             if e.status != 404:
                 raise
             time.sleep(2)
+    try:                                             # an older fork: bring it up to date with the library first
+        _gh_call("POST", f"{api}/repos/{fork}/merge-upstream", token, {"branch": base})
+    except GitHubError:
+        pass
     head = _gh_call("GET", f"{api}/repos/{repo}/git/ref/heads/{base}", token)["object"]["sha"]
     branch = "lap-" + re.sub(r"[^A-Za-z0-9-]+", "-", name[:-5]).strip("-")[:60] + time.strftime("-%Y%m%d%H%M%S")
-    _gh_call("POST", f"{api}/repos/{fork}/git/refs", token, {"ref": f"refs/heads/{branch}", "sha": head})
+    try:
+        _gh_call("POST", f"{api}/repos/{fork}/git/refs", token, {"ref": f"refs/heads/{branch}", "sha": head})
+    except GitHubError as e:
+        if e.status != 422:
+            raise
+        # the fork doesn't have the library's newest commit: branch from the fork's own copy instead
+        head = _gh_call("GET", f"{api}/repos/{fork}/git/ref/heads/{base}", token)["object"]["sha"]
+        _gh_call("POST", f"{api}/repos/{fork}/git/refs", token, {"ref": f"refs/heads/{branch}", "sha": head})
     put["branch"] = branch
+    try:
+        mine = _gh_call("GET", f"{api}/repos/{fork}/contents/{path}?ref={branch}", token).get("sha")
+    except GitHubError as e:
+        if e.status != 404:
+            raise
+        mine = None
+    put.pop("sha", None)
+    if mine:
+        put["sha"] = mine
     _gh_call("PUT", f"{api}/repos/{fork}/contents/{path}", token, put)
     pr = _gh_call("POST", f"{api}/repos/{repo}/pulls", token,
                   {"title": title, "head": f"{me}:{branch}", "base": base,
@@ -13649,7 +13673,7 @@ class SimReader(Reader):
 CAPTURE_DEFAULT_S = 60
 CAPTURE_MAX_S = 300
 CAPTURE_AT_START = 0
-_RE_KEYLIKE = re.compile(r"\b(?:sk-|AIza)[A-Za-z0-9_\-]{6,}|(?i:\bbearer\s+)[A-Za-z0-9._\-]{12,}|"
+_RE_KEYLIKE = re.compile(r"\b(?:sk-|AIza|gh[opsu]_)[A-Za-z0-9_\-]{6,}|(?i:\bbearer\s+)[A-Za-z0-9._\-]{12,}|"
                          r"(?i:api[_-]?key[\"']?\s*[:=]\s*[\"']?)[^\s\"',]{6,}")
 CAPTURE_README = """SimCoach capture
 ================

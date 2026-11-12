@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -91,7 +92,14 @@ def review(number):
                    "content": base64.b64encode(data).decode("ascii"), "branch": base}
             if cur_meta.get("sha"):
                 put["sha"] = cur_meta["sha"]
-            call("PUT", f"/repos/{REPO}/contents/{path}", put)
+            for attempt in range(4):                 # another lap landing at the same moment: try again
+                try:
+                    call("PUT", f"/repos/{REPO}/contents/{path}", put)
+                    break
+                except HTTPFail as e:
+                    if e.code != 409 or attempt == 3:
+                        raise
+                    time.sleep(3)
             added.append(f"{k[0]} · {k[1]} · {k[2]} ({sc.fmt_time(d['best_time']).replace(' ', ':')})")
         except Exception as e:
             refused.append(f"{name}: {e}")
