@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.2.1)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.3)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -9,6 +9,10 @@
 * **Supported Sims:** AC, ACC, AC Rally, AC EVO*, LMU, rF2, AMS2 (*Shared Memory = Project CARS 2*), RaceRoom, **iRacing**, EA WRC, F1 25 (*UDP 20777, 2025*), DiRT Rally 2.0. Shares port 20777 with SimHub.
 * **Live Coaching & Crew:** First clean lap maps corners for braking tones, focus cues & exit diagnosis. Engineer, Strategist & Spotter call fuel, virtual energy, temps, wear, track limits, rain/wetness, flags, gaps, cars alongside & banter.
 * **Setup, Overlay & Voice:** Click-to-apply setup sheet updates setups directly in-sim. Click-through overlay shows delta & pedal traces. Push-to-talk (wheel/F8), ref sharing, HTML reports & optional AI Q&A (OpenAI, Google Gemini or DeepSeek, with automatic fallback).
+
+### What's new in 6.3
+* **Update notice:** SimCoach checks GitHub for a newer release (at start-up and every 12 hours) and shows a banner with *Install update*, *What's new* and *Not now*. Turn it off or *Check now* in Settings.
+* **Setup briefing is a priority call** at the start of every session, so it's always heard ahead of intros and banter.
 
 ### What's new in 6.2.1
 * **Setup sheet pops up at the start of every session** (practice, qualifying, race, hotlap, rally), even on a rolling start.

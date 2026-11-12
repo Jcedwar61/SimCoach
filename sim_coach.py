@@ -67,7 +67,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.2.1"
+APP_VERSION = "6.3"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -116,6 +116,8 @@ DEFAULT_CONFIG = {
     "csp_weather_app": True,
     "second_screen": False,
     "second_screen_port": 8765,
+    "check_updates": True,
+    "update_skip": "",
 }
 RALLY_GAMES = {"EA WRC", "DiRT Rally 2.0", "AC Rally"}
 NO_REFUEL_GAMES = {"F1 25"}
@@ -5939,8 +5941,10 @@ class Coach:
     def _speak_setup_pair(self, strat_line: str, coach_line: str, now: float, sheet=None, force=False):
         crew = self.crew
         if crew and crew.on("strategist"):
-            crew.say("strategist", strat_line, now)
-            crew.say("coach", coach_line, now)
+            # The session-start briefing is a priority call: it goes ahead of intros and banter and never
+            # expires from the queue, so it's always heard. Briefings asked for later queue as normal.
+            crew.say("strategist", strat_line, now, urgent=force)
+            crew.say("coach", coach_line, now, urgent=force)
         else:
             self.say(strat_line, now, force=True)
             self.say(coach_line, now, force=True)
@@ -9788,6 +9792,67 @@ class SetupSheetWindow:
 
 
 
+# --- update check: GitHub's latest release against this version ---------------------------------------------
+UPDATE_REPO = "Jcedwar61/SimCoach"
+
+
+def _ver_tuple(v):
+    """'v6.2.1' -> (6, 2, 1, 0); anything without numbers -> (0, 0, 0, 0)."""
+    nums = [int(x) for x in re.findall(r"\d+", str(v or ""))[:4]]
+    return tuple(nums + [0] * (4 - len(nums)))
+
+
+def check_latest_release(timeout=8.0):
+    """The newest published release when it's newer than this copy, else None:
+    {"tag", "version", "url" (release page), "notes", "installer_url"}. Raises on network errors."""
+    import urllib.request
+    req = urllib.request.Request(f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
+                                 headers={"Accept": "application/vnd.github+json",
+                                          "User-Agent": f"SimCoach/{APP_VERSION}"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        d = json.loads(r.read().decode("utf-8"))
+    tag = str(d.get("tag_name") or "")
+    if not tag or d.get("draft") or d.get("prerelease") or _ver_tuple(tag) <= _ver_tuple(APP_VERSION):
+        return None
+    asset = next((a.get("browser_download_url") for a in d.get("assets") or []
+                  if str(a.get("name", "")).lower() == "simcoach-setup.exe"), None)
+    ver = tag.lstrip("vV")
+    return {"tag": tag, "version": ver, "url": d.get("html_url") or f"https://github.com/{UPDATE_REPO}/releases/latest",
+            "notes": str(d.get("body") or "")[:2000],
+            "installer_url": asset or f"https://github.com/{UPDATE_REPO}/raw/{tag}/SimCoach-Setup.exe"}
+
+
+def installed_copy():
+    """True when this is the copy SimCoach-Setup.exe installed (so the installer can update it in place)."""
+    local = os.environ.get("LOCALAPPDATA") or ""
+    return bool(local) and os.path.normcase(SCRIPT_DIR) == os.path.normcase(os.path.join(local, "Programs", "SimCoach"))
+
+
+def download_installer(url, dest, progress=None, timeout=30.0):
+    """Download the installer to dest and check it really is a Windows program (not an error page)."""
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": f"SimCoach/{APP_VERSION}"})
+    tmp = dest + ".part"
+    got = 0
+    with urllib.request.urlopen(req, timeout=timeout) as r, open(tmp, "wb") as fh:
+        total = int(r.headers.get("Content-Length") or 0)
+        while True:
+            chunk = r.read(256 * 1024)
+            if not chunk:
+                break
+            fh.write(chunk)
+            got += len(chunk)
+            if progress:
+                progress(got, total)
+    with open(tmp, "rb") as fh:
+        head = fh.read(2)
+    if head != b"MZ" or got < 500_000 or (total and got != total):
+        os.remove(tmp)
+        raise ValueError("the download wasn't a complete SimCoach installer")
+    os.replace(tmp, dest)
+    return dest
+
+
 # --- second screen: a read-only live page for a phone or tablet on the same network --------------------------
 SECOND_SCREEN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>SimCoach live</title>
@@ -9969,6 +10034,8 @@ class App:
             self.cfg["second_screen_token"] = secrets.token_urlsafe(9)
             save_config(self.cfg)
         self.screen = SecondScreen(self._screen_data, self.log, self.cfg["second_screen_token"])
+        self.update_info = None
+        r.after(6000, self._update_tick)
         r.after(300, self._apply_second_screen)
         if not cfg.get("driver_name") and not cfg.get("name_asked"):
             r.after(400, self._ask_name)
@@ -10596,6 +10663,15 @@ class App:
                         variable=self.vars["second_screen"]).pack(anchor="w", pady=(4, 0))
         self.screen_lbl = ttk.Label(c, text="", style="Mut.TLabel")
         self.screen_lbl.pack(anchor="w")
+        uf = ttk.Frame(c, style="Card.TFrame")
+        uf.pack(anchor="w", pady=(4, 0), fill="x")
+        self.vars["check_updates"] = tk.BooleanVar(value=bool(self.cfg.get("check_updates", True)))
+        ttk.Checkbutton(uf, text="Tell me when an update is out", variable=self.vars["check_updates"]).pack(side="left")
+        ttk.Button(uf, text="Check now", style="Small.TButton",
+                   command=lambda: (self.upd_lbl.configure(text="Checking…"), self.check_for_updates(manual=True))
+                   ).pack(side="left", padx=8)
+        self.upd_lbl = ttk.Label(c, text=f"You have SimCoach {APP_VERSION}.", style="Mut.TLabel")
+        self.upd_lbl.pack(anchor="w")
 
         rc = self._card(right, fill="x", pady=(8, 0))
         ttk.Label(rc, text="Race engineer, strategist & spotter", style="Sec.TLabel").pack(anchor="w", pady=(0, 2))
@@ -10869,6 +10945,96 @@ class App:
                  fuel_laps=(int(f.fuel / fpl) if (fpl and f.fuel > 0) else None))
         return d
 
+    # --- updates -----------------------------------------------------------------------------------------------
+    def _update_tick(self):
+        """Check now, then every 12 hours while SimCoach is open."""
+        if self.cfg.get("check_updates", True):
+            self.check_for_updates()
+        self.root.after(12 * 3600 * 1000, self._update_tick)
+
+    def check_for_updates(self, manual=False):
+        def work():
+            try:
+                info = check_latest_release()
+            except Exception as e:
+                file_log(f"Update check failed: {type(e).__name__}: {e}")
+                if manual:
+                    self.post(update_status="Couldn't reach GitHub to check for updates.")
+                return
+            if info is None:
+                if manual:
+                    self.post(update_status=f"You're up to date (SimCoach {APP_VERSION}).")
+                return
+            if not manual and info["tag"] == self.cfg.get("update_skip"):
+                return
+            self.post(update=info, update_status=f"SimCoach {info['version']} is available.")
+        threading.Thread(target=work, daemon=True, name="update-check").start()
+
+    def _show_update(self, info):
+        tk, ttk = self.tk, self.ttk
+        self.update_info = info
+        bar = getattr(self, "update_bar", None)
+        if bar is not None:
+            bar.destroy()
+        bar = self.update_bar = tk.Frame(self.root, bg="#132640", highlightbackground=C["acc"], highlightthickness=1)
+        tk.Label(bar, text=f"SimCoach {info['version']} is available", bg="#132640", fg=C["fg"],
+                 font=self._font(10, True)).pack(side="left", padx=(12, 6), pady=8)
+        self.update_msg = tk.Label(bar, text=f"You have {APP_VERSION}.", bg="#132640", fg=C["mut"], font=self._font(9))
+        self.update_msg.pack(side="left")
+        ttk.Button(bar, text="Not now", style="Small.TButton", command=self._skip_update).pack(side="right", padx=(4, 10))
+        ttk.Button(bar, text="What's new", style="Small.TButton",
+                   command=lambda: self._open(info["url"])).pack(side="right", padx=4)
+        can_install = sys.platform == "win32" and installed_copy()
+        self.update_btn = ttk.Button(bar, text="Install update" if can_install else "Download",
+                                     style="Accent.TButton",
+                                     command=self._install_update if can_install else (lambda: self._open(info["url"])))
+        self.update_btn.pack(side="right", padx=4)
+        bar.pack(fill="x", padx=18, pady=(8, 0), before=self.nb)
+        self.log(f"Update available: SimCoach {info['version']} ({info['url']})")
+
+    def _skip_update(self):
+        if self.update_info:
+            self.cfg["update_skip"] = self.update_info["tag"]
+            save_config(self.cfg)
+        bar, self.update_bar = getattr(self, "update_bar", None), None
+        if bar is not None:
+            bar.destroy()
+
+    def _install_update(self):
+        info = self.update_info
+        if not info or getattr(self, "_updating", False):
+            return
+        self._updating = True
+        self.update_btn.configure(state="disabled")
+        dest = os.path.join(tempfile.gettempdir(), f"SimCoach-Setup-{_RE_SAFE_REPORT.sub('_', info['tag'])}.exe")
+
+        def work():
+            try:
+                download_installer(info["installer_url"], dest,
+                                   progress=lambda got, total: self.post(update_progress=(got, total)))
+                self.post(update_progress="run")
+                import subprocess
+                subprocess.Popen([dest], close_fds=True)
+            except Exception as e:
+                file_log(f"Update download failed: {type(e).__name__}: {e}")
+                self.post(update_progress=f"error:{e}")
+            finally:
+                self._updating = False
+        threading.Thread(target=work, daemon=True, name="update-download").start()
+
+    def _update_progress(self, p):
+        if not getattr(self, "update_bar", None):
+            return
+        if p == "run":
+            self.update_msg.configure(text="Installer started: it closes SimCoach (your session is saved) and updates it.")
+        elif isinstance(p, str) and p.startswith("error:"):
+            self.update_msg.configure(text="Download failed. Use What's new to get it from GitHub.", fg=C["bad"])
+            self.update_btn.configure(state="normal")
+        else:
+            got, total = p
+            self.update_msg.configure(text=f"Downloading… {got * 100 // total}%" if total else
+                                      f"Downloading… {got // 1024} KB")
+
     def _apply_second_screen(self):
         if self.cfg.get("second_screen"):
             self.screen.start(self.cfg.get("second_screen_port", 8765))
@@ -11113,6 +11279,7 @@ class App:
         self.cfg["crew_language"] = _LANGUAGE_BY_LABEL.get(v["crew_language"].get(), "clean")
         self.cfg["udp_share_simhub"] = bool(v["udp_share_simhub"].get())
         self.cfg["second_screen"] = bool(v["second_screen"].get())
+        self.cfg["check_updates"] = bool(v["check_updates"].get())
         _UDPPort.share = self.cfg["udp_share_simhub"]
         self.cfg["whisper_model"] = _WHISPER_BY_LABEL.get(v["whisper_model"].get(), "small.en")
         self.cfg["ai_provider"] = _AI_BY_LABEL.get(v["ai_provider"].get(), "openai")
@@ -11659,6 +11826,12 @@ class App:
                     lbl.configure(text=self.controls.describe(a))
             if "keytest" in merged:
                 self.key_lbl.configure(text=merged["keytest"])
+            if "update" in merged:
+                self._show_update(merged["update"])
+            if "update_progress" in merged:
+                self._update_progress(merged["update_progress"])
+            if "update_status" in merged and hasattr(self, "upd_lbl"):
+                self.upd_lbl.configure(text=merged["update_status"])
             for ev in sheet_events:
                 if ev.get("setup_close") or (ev.get("setup_toggle") and self._sheet_open()):
                     self._close_sheet()

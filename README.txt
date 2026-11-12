@@ -182,6 +182,11 @@ Tabs & settings
       tablet on the same Wi-Fi for a big live delta, lap times, position, gaps, fuel and the coach's last
       call. Read-only: nothing on the page can change SimCoach. Windows may ask once to allow SimCoach
       on private networks. Crew banter never holds up urgent calls: an urgent call cuts it short.
+    * Updates: "Tell me when an update is out" (on by default) checks GitHub for a newer SimCoach at start-up
+      and every 12 hours. A banner offers Install update (downloads the new SimCoach-Setup.exe and runs it;
+      it closes SimCoach, saves your session and keeps your settings), What's new, or Not now (skips that
+      version). If you run SimCoach from the zip folder instead of the installer, it offers Download.
+      "Check now" checks straight away.
     * Conversation (AI): pick the AI provider (OpenAI, Google Gemini or DeepSeek), paste its API key and
       click "Test key". Keys are stored locally in %APPDATA%\SimCoach\config.json (or set the
       OPENAI_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY environment variable). With "try my other keys"
