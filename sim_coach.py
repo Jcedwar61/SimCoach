@@ -10796,12 +10796,27 @@ def list_library(timeout=8.0, api=None):
 
 def sync_library(coach, seen, store_dir=None, timeout=8.0, api=None, log=print):
     """Bring the shared library's laps into the reference folder: new combinations are added, library laps that
-    changed in the library are updated. The driver's own laps are never touched. seen ({file name: sha}) is
+    changed in the library are updated, and library laps taken out of the library are removed. The driver's own
+    laps are never touched. seen ({file name: sha}) is
     updated in place, so unchanged files aren't downloaded again. Returns (added, updated) lists of keys.
     A lap for the combination being driven is adopted straight away if the coach isn't on the driver's own lap."""
     store = store_dir or coach.store_dir
     added, updated = [], []
-    for it in list_library(timeout, api):
+    listing = list_library(timeout, api)
+    in_library = {it["name"] for it in listing}
+    for name in [n for n in seen if n not in in_library]:
+        # taken out of the library (e.g. a bad lap): drop the downloaded copy too, unless it's being driven
+        del seen[name]
+        dest = os.path.join(store, name)
+        try:
+            with open(dest, encoding="utf-8") as fh:
+                d = json.load(fh)
+            if d.get("source") == "library" and (coach is None or coach.key != tuple(d.get("key") or ())):
+                os.remove(dest)
+                log(f"Library lap removed (no longer in the library): {name}")
+        except Exception:
+            pass
+    for it in listing:
         name = it["name"]
         if seen.get(name) == it["sha"] or not it["url"] or it["size"] > 3_000_000:
             continue

@@ -115,4 +115,14 @@ coach.best_time = 140.0
 put(F, t=138.0)
 added, updated = sc.sync_library(coach, seen, STORE, api=API, log=logs.append)
 check(not added and not updated and coach.best_time == 140.0, "own lap being driven is kept")
+
+# a lap taken out of the library is removed locally; the driver's own laps and the lap being driven stay
+os.remove(os.path.join(lib, sc.library_file_name(B)))
+os.remove(os.path.join(lib, sc.library_file_name(E)))
+os.remove(os.path.join(lib, sc.library_file_name(F)))
+sc.sync_library(coach, seen, STORE, api=API, log=logs.append)
+check(not os.path.exists(os.path.join(STORE, sc.library_file_name(B))), "lap removed from the library is removed here")
+check(os.path.exists(os.path.join(STORE, sc.library_file_name(E))), "the driver's own lap stays")
+check(os.path.exists(os.path.join(STORE, sc.library_file_name(F))), "the lap being driven stays")
+check(sc.library_file_name(B) not in seen, "and it's forgotten, so a re-added lap is imported again")
 done()
