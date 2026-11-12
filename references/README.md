@@ -5,6 +5,10 @@ your own, SimCoach looks here for a lap with **exactly** that sim, track and car
 against it, until you beat it and your own lap takes over. Turn it off in Settings ("Use reference laps from the
 SimCoach library").
 
+SimCoach also imports new laps from here automatically: at start-up, every 12 hours, and with **References →
+Update from library**. A lap that's replaced here with a faster one is updated on every driver's PC. A driver's
+own lap for a combination is never replaced.
+
 ## Adding a lap
 
 1. Drive a clean, quick lap. SimCoach saves it as your reference.

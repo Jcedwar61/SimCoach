@@ -121,8 +121,10 @@ On track: live coaching & voice commands
   - SimCoach reference library: the first time you drive a sim / track / car with no lap of your own, SimCoach
     checks the shared library (the references folder of SimCoach's GitHub repository) for a lap with exactly
     that sim, track and car, and coaches you against it until you beat it. Share your own laps with
-    References > Share to library. Settings: "Use reference laps from the SimCoach library" (it asks GitHub
-    for that one file name; nothing else is sent).
+    References > Share to library. New laps shared to the library are imported automatically (at start-up,
+    every 12 hours, or References > Update from library); library laps that get faster are updated, and your
+    own laps are never replaced. Settings: "Use and auto-import reference laps from the SimCoach library"
+    (SimCoach only reads the library's file list and files from GitHub; nothing is sent).
   - Braking countdown: three tones (beep, beep, BEEP) timed to your reference braking point.
   - Race starts: a short reminder when you're sitting on the grid, then a start review after turn one
     (wheelspin, bogging down or lifting, 0-100 km/h time, and places gained or lost). Standing starts only.
