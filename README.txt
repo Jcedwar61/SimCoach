@@ -213,9 +213,11 @@ Tabs & settings
       cover your focus corners and big losses; Chatty adds everything else. Laps spoiled by traffic, a
       yellow flag or cold tyres are never roasted or blamed. New installs start with the Composed coach and
       Important-only crew lap reports.
-    * Phone / tablet screen (off by default): tick it and open the address shown under it on a phone or
-      tablet on the same Wi-Fi for a big live delta, lap times, position, gaps, fuel and the coach's last
-      call. Read-only: nothing on the page can change SimCoach. Windows may ask once to allow SimCoach
+    * Phone / tablet screen: click "Phone screen" at the top of the SimCoach window. It switches the live
+      page on and shows a QR code and an address: connect the phone or tablet to the same Wi-Fi as the PC,
+      scan the code with its camera (or type the address into its browser) for a big live delta, lap times,
+      position, gaps, fuel and the coach's last call. "Test on this PC" opens the same page in your browser.
+      The same switch is the "Phone / tablet live screen" tick box in Settings. Read-only: nothing on the page can change SimCoach. Windows may ask once to allow SimCoach
       on private networks. Crew banter never holds up urgent calls: an urgent call cuts it short.
     * Updates: "Tell me when an update is out" (on by default) checks GitHub for a newer SimCoach at start-up
       and every 12 hours. A banner offers Install update (downloads the new SimCoach-Setup.exe and runs it;
