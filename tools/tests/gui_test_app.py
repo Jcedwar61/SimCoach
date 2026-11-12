@@ -199,6 +199,14 @@ def run():
         check(app.screen.running() and saved.get("second_screen") is True, "Turn on starts it and saves the setting")
         btn = {c.cget("text"): c for c in kids(dlg) if c.winfo_class() == "TButton"}
         btn["Close"].invoke()
+        real_ip, sc.lan_ip = sc.lan_ip, lambda: "127.0.0.1"
+        app.phone_screen_dialog()
+        pump(0.3)
+        labels = " | ".join(str(c.cget("text")) for c in kids(app._phone_dlg) if c.winfo_class() == "TLabel")
+        shown = [c for c in kids(app._phone_dlg) if c.winfo_class() in ("Entry", "Canvas") and c.winfo_manager()]
+        check("isn't connected to a network" in labels and not shown, "PC not on a network: says so instead of a useless code")
+        {c.cget("text"): c for c in kids(app._phone_dlg) if c.winfo_class() == "TButton"}["Close"].invoke()
+        sc.lan_ip = real_ip
         app.vars["second_screen"].set(False)
         app.save_settings(quiet=True)
         pump()
