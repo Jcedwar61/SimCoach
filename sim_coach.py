@@ -67,7 +67,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.5"
+APP_VERSION = "6.6"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -10739,30 +10739,103 @@ def library_file_name(key):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", "__".join(key)) + ".json"
 
 
-def fetch_library_lap(key, timeout=8.0, base=None):
-    """The library's reference lap for this exact sim / track / car, or None if there isn't one.
-    Checked like an import: a usable reference for this key, a real (not provisional) lap."""
-    import urllib.error
+LIBRARY_API = f"https://api.github.com/repos/{UPDATE_REPO}/contents/references"
+
+
+def _library_get(url, timeout, limit=3_000_000):
     import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": f"SimCoach/{APP_VERSION}",
+                                               "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("library file too big")
+    return raw
+
+
+def _checked_library_lap(raw, name):
+    """A downloaded library file, checked like an import: a usable reference whose sim / track / car match its
+    file name, and a real (not provisional) lap."""
+    d = json.loads(raw.decode("utf-8"))
+    prob = ref_problem(d)
+    if prob:
+        raise ValueError(f"unusable: {prob}")
+    if library_file_name(d["key"]) != name or d.get("provisional") or d.get("source") == "starter":
+        raise ValueError("doesn't match its sim, track and car")
+    d["source"] = "library"
+    return d
+
+
+def fetch_library_lap(key, timeout=8.0, base=None):
+    """The library's reference lap for this exact sim / track / car, or None if there isn't one."""
+    import urllib.error
     from urllib.parse import quote
-    url = (base or LIBRARY_URL) + quote(library_file_name(key))
-    req = urllib.request.Request(url, headers={"User-Agent": f"SimCoach/{APP_VERSION}"})
+    name = library_file_name(key)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read(3_000_001)
+        raw = _library_get((base or LIBRARY_URL) + quote(name), timeout)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
         raise
-    if len(raw) > 3_000_000:
-        raise ValueError("library file too big")
-    d = json.loads(raw.decode("utf-8"))
-    prob = ref_problem(d)
-    if prob:
-        raise ValueError(f"library file unusable: {prob}")
-    if [str(x) for x in d["key"]] != [str(x) for x in key] or d.get("provisional") or d.get("source") == "starter":
-        raise ValueError("library file doesn't match this sim, track and car")
-    return d
+    return _checked_library_lap(raw, name)
+
+
+def list_library(timeout=8.0, api=None):
+    """The laps in the shared library: [{"name", "sha", "size", "url"}] (sha changes whenever a file does)."""
+    items = json.loads(_library_get(api or LIBRARY_API, timeout, limit=5_000_000).decode("utf-8"))
+    return [{"name": it["name"], "sha": it.get("sha", ""), "size": int(it.get("size") or 0),
+             "url": it.get("download_url") or ""}
+            for it in items if isinstance(it, dict) and str(it.get("name", "")).endswith(".json")
+            and it.get("type", "file") == "file"]
+
+
+def sync_library(coach, seen, store_dir=None, timeout=8.0, api=None, log=print):
+    """Bring the shared library's laps into the reference folder: new combinations are added, library laps that
+    changed in the library are updated. The driver's own laps are never touched. seen ({file name: sha}) is
+    updated in place, so unchanged files aren't downloaded again. Returns (added, updated) lists of keys.
+    A lap for the combination being driven is adopted straight away if the coach isn't on the driver's own lap."""
+    store = store_dir or coach.store_dir
+    added, updated = [], []
+    for it in list_library(timeout, api):
+        name = it["name"]
+        if seen.get(name) == it["sha"] or not it["url"] or it["size"] > 3_000_000:
+            continue
+        dest = os.path.join(store, name)
+        local_src = None
+        if os.path.exists(dest):
+            try:
+                with open(dest, encoding="utf-8") as fh:
+                    local_src = json.load(fh).get("source") or "own"
+            except Exception:
+                local_src = "own"           # unreadable: leave it alone
+        if local_src not in (None, "library"):
+            seen[name] = it["sha"]          # the driver's own lap for this combination: never replaced
+            continue
+        try:
+            d = _checked_library_lap(_library_get(it["url"], timeout), name)
+        except Exception as e:
+            log(f"Library lap {name} not used: {e}")
+            seen[name] = it["sha"]
+            continue
+        key = tuple(d["key"])
+        if coach is not None and coach.key == key and coach.ref_source == "own":
+            seen[name] = it["sha"]
+            continue
+        try:
+            adopted = coach.import_reference(d, dest) if coach is not None else False
+            if coach is None:
+                os.makedirs(store, exist_ok=True)
+                with open(dest, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh)
+        except Exception as e:
+            log(f"Library lap {name} not saved: {e}")
+            continue
+        seen[name] = it["sha"]
+        (updated if local_src == "library" else added).append(key)
+        if adopted:
+            coach.say(f"A new reference lap for this car and track just arrived from the SimCoach library, "
+                      f"{fmt_time(coach.best_time)}. I'll coach you against it.", time.monotonic(), force=True)
+    return added, updated
 
 
 def installed_copy():
@@ -10979,6 +11052,7 @@ class App:
         self.screen = SecondScreen(self._screen_data, self.log, self.cfg["second_screen_token"])
         self.update_info = None
         r.after(6000, self._update_tick)
+        r.after(15000, self._library_tick)
         r.after(300, self._apply_second_screen)
         if not cfg.get("driver_name") and not cfg.get("name_asked"):
             r.after(400, self._ask_name)
@@ -11596,7 +11670,7 @@ class App:
         ttk.Checkbutton(c, text="Starter laps: coach from lap one at known tracks",
                         variable=self.vars["starter_laps"]).pack(anchor="w", pady=2)
         self.vars["shared_refs"] = tk.BooleanVar(value=bool(self.cfg.get("shared_refs", True)))
-        ttk.Checkbutton(c, text="Use reference laps from the SimCoach library",
+        ttk.Checkbutton(c, text="Use and auto-import reference laps from the SimCoach library",
                         variable=self.vars["shared_refs"]).pack(anchor="w", pady=2)
         pf = ttk.Frame(c, style="Card.TFrame")
         pf.pack(anchor="w", pady=(6, 0))
@@ -11678,11 +11752,13 @@ class App:
         ttk.Button(bar, text="Import…", command=self.import_ref).pack(side="left")
         ttk.Button(bar, text="Refresh", command=self.load_refs).pack(side="left", padx=8)
         ttk.Button(bar, text="Share to library…", command=self.share_ref).pack(side="left")
+        ttk.Button(bar, text="Update from library", command=lambda: (
+            self.share_lbl.configure(text="Checking the library…"), self.sync_library(manual=True))).pack(side="left", padx=8)
         self.share_lbl = ttk.Label(bar, text="", style="Mut.TLabel", wraplength=520)
         self.share_lbl.pack(side="left", padx=10)
         ttk.Label(t, text="Your reference laps (one per sim, track and car). Import a friend's or a quicker "
-                          "driver's export to be coached against their lap. Laps from the SimCoach library are "
-                          "fetched automatically the first time you drive a combination.").pack(anchor="w", pady=(4, 0))
+                          "driver's export to be coached against their lap. New laps shared to the SimCoach library "
+                          "are added automatically (your own laps are never replaced).").pack(anchor="w", pady=(4, 0))
         self.ref_tv = self._tree(t, [("sim", "Sim"), ("track", "Track"), ("car", "Car"), ("best", "Best lap"),
                                      ("corners", "Corners"), ("source", "Source"), ("saved", "Updated")],
                                  (110, 260, 240, 90, 70, 80, 140), 14)
@@ -11981,6 +12057,36 @@ class App:
         self.update_btn.pack(side="right", padx=4)
         bar.pack(fill="x", padx=18, pady=(8, 0), before=self.nb)
         self.log(f"Update available: SimCoach {info['version']} ({info['url']})")
+
+    def _library_tick(self):
+        """Keep the reference folder in step with the shared library: now, then every 12 hours."""
+        if self.cfg.get("shared_refs", True):
+            self.sync_library()
+        self.root.after(12 * 3600 * 1000, self._library_tick)
+
+    def sync_library(self, manual=False):
+        if getattr(self, "_syncing", False):
+            return
+        self._syncing = True
+
+        def work():
+            try:
+                seen = dict(self.cfg.get("library_seen") or {})
+                added, updated = sync_library(self.coach, seen, REF_DIR, log=self.log)
+                self.cfg["library_seen"] = seen
+                save_config(self.cfg)
+                msg = (f"Library: {len(added)} new reference lap{'s' if len(added) != 1 else ''}"
+                       + (f", {len(updated)} updated" if updated else "") + "." if (added or updated) else
+                       "Library: you have every lap in it." if manual else "")
+                for k in added + updated:
+                    self.log(f"Library lap {'updated' if k in updated else 'added'}: {k[0]} · {k[1]} · {k[2]}")
+                self.post(library_sync=msg)
+            except Exception as e:
+                file_log(f"Library sync failed: {type(e).__name__}: {e}")
+                self.post(library_sync="Couldn't reach the SimCoach library." if manual else "")
+            finally:
+                self._syncing = False
+        threading.Thread(target=work, daemon=True, name="library-sync").start()
 
     def _skip_update(self):
         if self.update_info:
@@ -12820,6 +12926,10 @@ class App:
                     lbl.configure(text=self.controls.describe(a))
             if "keytest" in merged:
                 self.key_lbl.configure(text=merged["keytest"])
+            if "library_sync" in merged:
+                if merged["library_sync"]:
+                    self.share_lbl.configure(text=merged["library_sync"])
+                self.load_refs()
             if "update" in merged:
                 self._show_update(merged["update"])
             if "update_progress" in merged:
