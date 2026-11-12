@@ -1,6 +1,6 @@
 """The real app window (needs a display; on Linux run under xvfb-run): Settings and AI provider switching,
 the welcome box, old personalities, the setup sheet's confirm/cancel, the overlay's SETUP button and menu,
-the phone page (loopback only) and the update banner (faked release, no network)."""
+the phone page (loopback only), the update banner (faked release, no network) and the Best laps tab."""
 import json
 import os
 import sys
@@ -22,6 +22,15 @@ sc.SecondScreen.start = lambda self, port, host="0.0.0.0": orig_start(self, port
 FAKE = {"tag": "v99.0", "version": "99.0", "url": "https://example.invalid/release", "notes": "",
         "installer_url": "https://example.invalid/SimCoach-Setup.exe"}
 sc.check_latest_release = lambda timeout=8.0: FAKE
+import tempfile                                                         # noqa: E402
+sc.REF_DIR, sc.BEST_DIR = tempfile.mkdtemp(), os.path.join(tempfile.mkdtemp(), "Best laps")
+_r = sc.starter_reference("Spa", "gt3")
+LAP = {"key": ["ACC", "spa", "porsche_992_gt3_r"], "ref": _r["ref"], "best_time": 138.2,
+       "corners": [list(c) for c in _r["corners"]], "best_corner": {str(k): v for k, v in _r["best_corner"].items()},
+       "saved": "2026-11-12 10:00", "provisional": False, "source": "own"}
+LAPNAME = sc.library_file_name(LAP["key"])
+json.dump(LAP, open(os.path.join(sc.REF_DIR, LAPNAME), "w"))
+sc.list_library = lambda *a, **k: []
 app = sc.App(cfg, voice_on=False, mic_on=False)
 root = app.root
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -140,6 +149,31 @@ def run():
             check(False, "plain address refused")
         except Exception as e:
             check(getattr(e, "code", None) == 404, "plain address refused")
+        # Best laps tab: saved ready to share, the web-page route without in-app sign-in, then in-app sharing
+        app.nb.select(app.tab_best)
+        pump(0.5)
+        check(app.best_tv.exists(LAPNAME) and app.best_tv.set(LAPNAME, "status") == "Not shared",
+              "best lap listed, not shared yet")
+        check(os.path.exists(os.path.join(sc.BEST_DIR, LAPNAME)), "and saved in the Best laps folder")
+        opened = []
+        app._open = lambda t: opened.append(t)
+        cid, sc.GITHUB_CLIENT_ID = sc.GITHUB_CLIENT_ID, ""
+        app.share_best([LAPNAME])
+        sc.GITHUB_CLIENT_ID = cid
+        check(any("upload/main/references" in str(o) for o in opened) and "Drag" in app.best_lbl.cget("text"),
+              "no sign-in set up: GitHub upload page with the file's folder")
+        import tkinter.messagebox as mb
+        mb.askyesno = lambda *a, **k: True
+        cfg["github_client_id"], cfg["github_token"], cfg["github_login"] = "cid", "tok", "Sam"
+        sc.upload_library_lap = lambda token, name, data, title, **k: ("proposed", "https://example.invalid/pull/1")
+        app.share_best([LAPNAME])
+        wait_for(lambda: app.best_tv.exists(LAPNAME) and app.best_tv.set(LAPNAME, "status").startswith("Sent"), 5)
+        check(app.best_tv.set(LAPNAME, "status") == "Sent · being checked", "shared from the app: being checked")
+        check(saved.get("shared_laps", {}).get(LAPNAME, {}).get("url") == "https://example.invalid/pull/1",
+              "remembered with its link")
+        app._lib_index = {LAPNAME: sc.git_blob_sha(open(os.path.join(sc.BEST_DIR, LAPNAME), "rb").read())}
+        app.load_best()
+        check(app.best_tv.set(LAPNAME, "status") == "In the library ✓", "added: in the library")
         app.vars["second_screen"].set(False)
         app.save_settings(quiet=True)
         pump()

@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.6)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.7)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -9,6 +9,10 @@
 * **Supported Sims:** AC, ACC, AC Rally, AC EVO*, LMU, rF2, AMS2 (*Shared Memory = Project CARS 2*), RaceRoom, **iRacing**, EA WRC, F1 25 (*UDP 20777, 2025*), DiRT Rally 2.0. Shares port 20777 with SimHub.
 * **Live Coaching & Crew:** First clean lap maps corners for braking tones, focus cues & exit diagnosis. Engineer, Strategist & Spotter call fuel, virtual energy, temps, wear, track limits, rain/wetness, flags, gaps, cars alongside & banter.
 * **Setup, Overlay & Voice:** Click-to-apply setup sheet updates setups directly in-sim. Click-through overlay shows delta & pedal traces. Push-to-talk (wheel/F8), ref sharing, HTML reports & optional AI Q&A (OpenAI, Google Gemini or DeepSeek, with automatic fallback).
+
+### What's new in 6.7
+* **Best laps tab:** your best lap for every sim, track and car, saved ready to share (*Documents\SimCoach Reports\Best laps*), with its library status.
+* **Share from the app:** *Share selected* or *Share all new* uploads laps to the SimCoach library. Sign in to GitHub once with a short code (your password never goes through SimCoach). Laps are checked and added automatically within a minute or two (clean, believable and faster than the library's lap for that car and track), then reach every SimCoach driver.
 
 ### What's new in 6.6
 * **Library laps import automatically:** new laps shared to the [SimCoach reference library](references/) are added to your References at start-up and every 12 hours (or *References → Update from library*). Library laps that someone improves are updated too; your own laps are never replaced. If a lap arrives for the car and track you're driving, the coach switches to it and tells you.

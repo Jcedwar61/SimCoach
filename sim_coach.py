@@ -67,7 +67,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.6"
+APP_VERSION = "6.7"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -122,6 +122,11 @@ DEFAULT_CONFIG = {
     "shared_refs": True,
     "sheet_autopop": True,
     "update_skip": "",
+    "library_seen": {},
+    "shared_laps": {},
+    "github_token": "",
+    "github_login": "",
+    "github_client_id": "",
 }
 RALLY_GAMES = {"EA WRC", "DiRT Rally 2.0", "AC Rally"}
 NO_REFUEL_GAMES = {"F1 25"}
@@ -10838,6 +10843,223 @@ def sync_library(coach, seen, store_dir=None, timeout=8.0, api=None, log=print):
     return added, updated
 
 
+# ---- sharing best laps from the app (GitHub sign-in with a one-time code, then a commit or a pull request) ----
+GITHUB_API = "https://api.github.com"
+GITHUB_WEB = "https://github.com"
+# The SimCoach OAuth app's client ID (public, not a secret: it only names the app on GitHub's sign-in page).
+GITHUB_CLIENT_ID = "Ov23litlosIIZII412tg"
+BEST_DIR = os.path.join(REPORT_DIR, "Best laps")
+
+
+def share_payload(d):
+    """The exact bytes a lap is shared as: the reference marked as a library lap, compact JSON. The same lap always
+    gives the same bytes, so its git fingerprint tells whether the library already has it."""
+    out = dict(d)
+    out["source"] = "library"
+    out["provisional"] = False
+    return json.dumps(out, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def git_blob_sha(data):
+    import hashlib
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def shareable_lap(path):
+    """The driver's own clean lap in a reference file, or None (library laps, provisional laps, unusable files)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+    except Exception:
+        return None
+    if ref_problem(d) or d.get("provisional") or d.get("source") in ("library", "starter"):
+        return None
+    return d
+
+
+def save_best_laps(ref_dir, best_dir):
+    """Keep the Best laps folder in step with the driver's own reference laps: one ready-to-share file per sim /
+    track / car, rewritten when the lap improves. Returns the file names written."""
+    written = []
+    try:
+        names = sorted(f for f in os.listdir(ref_dir) if f.endswith(".json") and not f.endswith(".sessions.json"))
+    except OSError:
+        return written
+    for name in names:
+        d = shareable_lap(os.path.join(ref_dir, name))
+        if d is None:
+            continue
+        data = share_payload(d)
+        dest = os.path.join(best_dir, name)
+        try:
+            with open(dest, "rb") as fh:
+                if fh.read() == data:
+                    continue
+        except OSError:
+            pass
+        try:
+            os.makedirs(best_dir, exist_ok=True)
+            with open(dest + ".tmp", "wb") as fh:
+                fh.write(data)
+            os.replace(dest + ".tmp", dest)
+            written.append(name)
+        except OSError:
+            continue
+    return written
+
+
+def library_submission_problem(d, name, current=None):
+    """None if d can go into the shared library as file `name`, else why not. The same rules run in the app
+    (before sending) and on GitHub (tools/references/review_submission.py, before adding it): a complete, clean
+    lap for the sim / track / car in the file name, believable numbers, and faster than the library's lap for
+    that combination (current), if it has one."""
+    prob = ref_problem(d)
+    if prob:
+        return f"not a usable lap ({prob})"
+    if library_file_name(d["key"]) != name:
+        return "the file name doesn't match its sim, track and car"
+    if d.get("provisional") or d.get("source") == "starter":
+        return "not a clean lap"
+    bt = float(d["best_time"])
+    ref = d["ref"]
+    t, spd = ref["t"], ref["speed"]
+    if not 15.0 <= bt <= 1800.0:
+        return "lap time out of range"
+    if not (min(spd) >= 0 and max(spd) <= 500):
+        return "speed trace out of range"
+    if t[0] > 5.0 or not (0.8 * bt <= t[-1] <= bt + 2.0):
+        return "the lap trace doesn't match the lap time"
+    if sum(1 for a, b in zip(t, t[1:]) if b < a - 0.05) > BINS // 100:
+        return "the lap trace runs backwards"
+    if current is not None:
+        try:
+            cur = float(current.get("best_time") or 0)
+        except (TypeError, ValueError):
+            cur = 0
+        if cur > 0 and bt >= cur - 0.0005:
+            return f"the library's lap is faster or equal ({fmt_time(cur).replace(' ', ':')})"
+    return None
+
+
+class GitHubError(Exception):
+    def __init__(self, msg, status=0):
+        super().__init__(msg)
+        self.status = status
+
+
+def _gh_call(method, url, token=None, body=None, form=None, timeout=20.0):
+    import urllib.error
+    import urllib.request
+    from urllib.parse import urlencode
+    headers = {"User-Agent": f"SimCoach/{APP_VERSION}", "Accept": "application/vnd.github+json"}
+    data = None
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if form is not None:
+        data = urlencode(form).encode()
+        headers["Accept"] = "application/json"
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode("utf-8")).get("message") or e.reason
+        except Exception:
+            msg = e.reason
+        raise GitHubError(f"GitHub said: {msg} ({e.code})", e.code) from None
+    return json.loads(raw.decode("utf-8")) if raw.strip() else {}
+
+
+def github_device_start(client_id):
+    """Start a sign-in: {"user_code", "verification_uri", "device_code", "interval", "expires_in"}."""
+    return _gh_call("POST", f"{GITHUB_WEB}/login/device/code", form={"client_id": client_id, "scope": "public_repo"})
+
+
+def github_device_poll(client_id, start, cancelled=lambda: False, sleep=time.sleep):
+    """Wait for the driver to enter the code on GitHub; returns the access token (raises on denial or expiry)."""
+    interval = max(1, int(start.get("interval") or 5))
+    deadline = time.monotonic() + int(start.get("expires_in") or 900)
+    while time.monotonic() < deadline and not cancelled():
+        sleep(interval)
+        d = _gh_call("POST", f"{GITHUB_WEB}/login/oauth/access_token",
+                     form={"client_id": client_id, "device_code": start["device_code"],
+                           "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
+        if d.get("access_token"):
+            return d["access_token"]
+        err = d.get("error")
+        if err == "slow_down":
+            interval += 5
+        elif err != "authorization_pending":
+            raise GitHubError({"access_denied": "sign-in was cancelled on GitHub",
+                               "expired_token": "the code expired"}.get(err, d.get("error_description") or err))
+    raise GitHubError("sign-in timed out" if not cancelled() else "sign-in cancelled")
+
+
+def upload_library_lap(token, name, data, title, repo=None, log=print):
+    """Put one lap in the shared library. With write access to the library's repository it's committed straight
+    in; otherwise it goes to the driver's own copy (fork) of it and a pull request asks the owner to add it.
+    Proposals are checked and added automatically on GitHub (the same rules as here).
+    Returns ("added" | "proposed", web link) or ("refused", why) when it can't go in (e.g. the library is faster)."""
+    import base64
+    repo = repo or UPDATE_REPO
+    api = GITHUB_API
+    me = _gh_call("GET", f"{api}/user", token)["login"]
+    info = _gh_call("GET", f"{api}/repos/{repo}", token)
+    base = info.get("default_branch") or "main"
+    path = f"references/{name}"
+    try:
+        cur = _gh_call("GET", f"{api}/repos/{repo}/contents/{path}?ref={base}", token)
+        existing = cur.get("sha")
+    except GitHubError as e:
+        if e.status != 404:
+            raise
+        cur, existing = {}, None
+    if existing == git_blob_sha(data):
+        return "added", f"{GITHUB_WEB}/{repo}/blob/{base}/{path}"
+    current = None
+    if existing:
+        try:
+            import base64 as _b64
+            current = json.loads(_b64.b64decode(cur.get("content") or "").decode("utf-8"))
+        except Exception:
+            current = None
+    prob = library_submission_problem(json.loads(data.decode("utf-8")), name, current)
+    if prob:
+        return "refused", prob
+    put = {"message": title, "content": base64.b64encode(data).decode("ascii")}
+    if existing:
+        put["sha"] = existing
+    if (info.get("permissions") or {}).get("push"):
+        put["branch"] = base
+        r = _gh_call("PUT", f"{api}/repos/{repo}/contents/{path}", token, put)
+        return "added", (r.get("content") or {}).get("html_url") or f"{GITHUB_WEB}/{repo}/blob/{base}/{path}"
+    fork = _gh_call("POST", f"{api}/repos/{repo}/forks", token, {}).get("full_name") or f"{me}/{repo.split('/')[1]}"
+    for _ in range(30):                              # a new fork takes a few seconds to appear
+        try:
+            _gh_call("GET", f"{api}/repos/{fork}", token)
+            break
+        except GitHubError as e:
+            if e.status != 404:
+                raise
+            time.sleep(2)
+    head = _gh_call("GET", f"{api}/repos/{repo}/git/ref/heads/{base}", token)["object"]["sha"]
+    branch = "lap-" + re.sub(r"[^A-Za-z0-9-]+", "-", name[:-5]).strip("-")[:60] + time.strftime("-%Y%m%d%H%M%S")
+    _gh_call("POST", f"{api}/repos/{fork}/git/refs", token, {"ref": f"refs/heads/{branch}", "sha": head})
+    put["branch"] = branch
+    _gh_call("PUT", f"{api}/repos/{fork}/contents/{path}", token, put)
+    pr = _gh_call("POST", f"{api}/repos/{repo}/pulls", token,
+                  {"title": title, "head": f"{me}:{branch}", "base": base,
+                   "body": "Shared from SimCoach's Best laps tab. It's checked and added to the library "
+                           "automatically (tools/references/review_submission.py)."})
+    log(f"Proposed {name} for the library: {pr.get('html_url')}")
+    return "proposed", pr.get("html_url") or f"{GITHUB_WEB}/{repo}/pulls"
+
+
 def installed_copy():
     """True when this is the copy SimCoach-Setup.exe installed (so the installer can update it in place)."""
     local = os.environ.get("LOCALAPPDATA") or ""
@@ -11298,7 +11520,8 @@ class App:
         nb = self.nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True, padx=18, pady=(10, 18))
         tabs = [("Live", "tab_live"), ("Radio check", "tab_radio"), ("Laps & corners", "tab_laps"),
-                ("Settings", "tab_set"), ("References", "tab_ref"), ("Reports", "tab_rep"), ("Log", "tab_log")]
+                ("Settings", "tab_set"), ("References", "tab_ref"), ("Best laps", "tab_best"), ("Reports", "tab_rep"),
+                ("Log", "tab_log")]
         for name, attr in tabs:
             f = ttk.Frame(nb)
             setattr(self, attr, f)
@@ -11308,6 +11531,7 @@ class App:
         self._laps()
         self._settings()
         self._references()
+        self._best_laps()
         self._reports()
         self._log()
         nb.bind("<<NotebookTabChanged>>", self._tab_changed)
@@ -11316,6 +11540,8 @@ class App:
         tab = self.nb.select()
         if tab == str(self.tab_ref):
             self.load_refs()
+        elif tab == str(self.tab_best):
+            self.load_best()
         elif tab == str(self.tab_rep):
             self.load_reports()
         elif tab == str(self.tab_radio):
@@ -11801,34 +12027,323 @@ class App:
                 del cache[f]
 
     def share_ref(self):
-        """Put the selected lap in a folder ready to upload to the shared library, and open the upload page.
-        (The file is the reference exactly as saved: sim, track, car and the lap trace; no name or settings.)"""
+        """References tab: share the selected lap (the Best laps tab does the work)."""
         sel = self.ref_tv.selection()
         if not sel:
             self.share_lbl.configure(text="Select one of your laps first.")
             return
-        src = os.path.join(REF_DIR, sel[0])
-        try:
-            with open(src, encoding="utf-8") as fh:
-                d = json.load(fh)
-            prob = ref_problem(d)
-            if prob or d.get("provisional"):
-                raise ValueError(prob or "that lap had an off-track moment; share a clean one")
-            if d.get("source") == "library":
-                raise ValueError("that lap came from the library already")
-            out_dir = os.path.join(REPORT_DIR, "Library uploads")
-            os.makedirs(out_dir, exist_ok=True)
-            d["source"] = "library"
-            name = library_file_name(d["key"])
-            with open(os.path.join(out_dir, name), "w", encoding="utf-8") as fh:
-                json.dump(d, fh, separators=(",", ":"))
-        except Exception as e:
-            self.share_lbl.configure(text=f"Can't share it: {e}")
+        if shareable_lap(os.path.join(REF_DIR, sel[0])) is None:
+            self.share_lbl.configure(text="Only your own clean laps can be shared (not library laps or laps "
+                                          "with an off-track moment).")
             return
-        self._open(out_dir)
-        self._open(f"https://github.com/{UPDATE_REPO}/upload/main/references")
-        self.share_lbl.configure(text=f"Drag {name} from the folder that opened onto the GitHub page, then "
-                                      f"Commit (others propose it and you approve).")
+        self.nb.select(self.tab_best)
+        self.load_best()
+        if self.best_tv.exists(sel[0]):
+            self.best_tv.selection_set(sel[0])
+        self.share_best([sel[0]])
+
+    # ---- Best laps tab: the driver's own best laps, kept ready to share, and sharing them to the library ----
+    def _best_laps(self):
+        ttk = self.ttk
+        t = self.tab_best
+        bar = ttk.Frame(t)
+        bar.pack(fill="x", pady=(10, 4))
+        ttk.Button(bar, text="Share selected", style="Accent.TButton",
+                   command=lambda: self.share_best(list(self.best_tv.selection()))).pack(side="left")
+        ttk.Button(bar, text="Share all new", command=self.share_all_best).pack(side="left", padx=8)
+        ttk.Button(bar, text="Open folder", command=self.open_best_folder).pack(side="left")
+        ttk.Button(bar, text="View on GitHub", command=self.view_best).pack(side="left", padx=8)
+        self.gh_btn = ttk.Button(bar, text="", command=self.github_account)
+        self.gh_btn.pack(side="right")
+        self.best_lbl = ttk.Label(t, text="", style="Mut.TLabel", wraplength=900)
+        self.best_lbl.pack(anchor="w", pady=(2, 0))
+        ttk.Label(t, text=f"Your best lap for every sim, track and car, saved ready to share in {BEST_DIR}. "
+                          "Share one to the SimCoach library and every SimCoach driver gets it automatically. "
+                          "Shared: sim, track, car and the lap trace (speed, pedals, steering); never your "
+                          "name, settings or keys. Your GitHub username shows on the submission."
+                  ).pack(anchor="w", pady=(4, 0))
+        self.best_tv = self._tree(t, [("sim", "Sim"), ("track", "Track"), ("car", "Car"), ("best", "Best lap"),
+                                      ("saved", "Set"), ("status", "Library")],
+                                  (110, 250, 230, 90, 140, 230), 14)
+        self.best_tv.bind("<Double-1>", lambda _e: self.view_best())
+        self._lib_index = None            # {file name: sha} from the library, refreshed every 10 minutes
+        self._lib_index_t = 0.0
+        self._gh_label()
+        self.root.after(20000, self._best_tick)
+
+    def _best_tick(self):
+        threading.Thread(target=lambda: save_best_laps(REF_DIR, BEST_DIR), daemon=True, name="best-laps").start()
+        self.root.after(10 * 60 * 1000, self._best_tick)
+
+    def _gh_client_id(self):
+        return (self.cfg.get("github_client_id") or GITHUB_CLIENT_ID or "").strip()
+
+    def _gh_label(self):
+        who = self.cfg.get("github_login")
+        self.gh_btn.configure(text=f"GitHub: {who} · Sign out" if self.cfg.get("github_token") and who
+                              else "Sign in to GitHub")
+
+    def github_account(self):
+        from tkinter import messagebox
+        if self.cfg.get("github_token"):
+            if messagebox.askyesno("SimCoach", "Sign out of GitHub on this PC?"):
+                self.cfg["github_token"] = ""
+                self.cfg["github_login"] = ""
+                save_config(self.cfg)
+                self._gh_label()
+            return
+        self.github_sign_in()
+
+    def github_sign_in(self, then=None):
+        """GitHub's sign-in for apps: SimCoach shows a short code, the driver enters it on github.com (no password
+        goes through SimCoach). The token only allows working with public repositories."""
+        cid = self._gh_client_id()
+        if not cid:
+            self.best_lbl.configure(text="In-app sharing isn't set up in this copy; use Share selected to share "
+                                         "through the GitHub web page instead.")
+            return
+        if getattr(self, "_gh_dialog", None) is not None:
+            return
+        tk, ttk = self.tk, self.ttk
+        dlg = self._gh_dialog = tk.Toplevel(self.root)
+        dlg.title("Sign in to GitHub")
+        dlg.configure(bg=C["bg"])
+        dlg.transient(self.root)
+        box = ttk.Frame(dlg, padding=20)
+        box.pack(fill="both", expand=True)
+        msg = ttk.Label(box, text="Getting a sign-in code…", wraplength=380)
+        msg.pack(anchor="w")
+        code = ttk.Label(box, text="", style="H.TLabel")
+        code.pack(pady=12)
+        btns = ttk.Frame(box)
+        btns.pack(fill="x")
+        go = ttk.Button(btns, text="Copy code and open GitHub", style="Accent.TButton", state="disabled")
+        go.pack(side="left")
+        state = {"cancel": False}
+
+        def close():
+            state["cancel"] = True
+            self._gh_dialog = None
+            try:
+                dlg.destroy()
+            except Exception:
+                pass
+        ttk.Button(btns, text="Cancel", command=close).pack(side="right")
+        dlg.protocol("WM_DELETE_WINDOW", close)
+
+        def shown(start):
+            if state["cancel"]:
+                return
+            msg.configure(text="Enter this code on the GitHub page, then allow SimCoach. This window closes by "
+                               "itself when you're done.")
+            code.configure(text=start["user_code"])
+
+            def copy_open():
+                self.root.clipboard_clear()
+                self.root.clipboard_append(start["user_code"])
+                self._open(start.get("verification_uri") or f"{GITHUB_WEB}/login/device")
+            go.configure(state="normal", command=copy_open)
+            copy_open()
+
+        def work():
+            try:
+                start = github_device_start(cid)
+                self.root.after(0, lambda: shown(start))
+                token = github_device_poll(cid, start, cancelled=lambda: state["cancel"])
+                login = _gh_call("GET", f"{GITHUB_API}/user", token).get("login", "")
+                self.post(gh_signed_in=(token, login, then))
+            except Exception as e:
+                if not state["cancel"]:
+                    self.post(gh_error=f"GitHub sign-in didn't finish: {e}")
+            finally:
+                self.root.after(0, close)
+        threading.Thread(target=work, daemon=True, name="github-sign-in").start()
+
+    def _gh_signed_in(self, ev):
+        token, login, then = ev
+        self.cfg["github_token"] = token
+        self.cfg["github_login"] = login
+        save_config(self.cfg)
+        self._gh_label()
+        self.best_lbl.configure(text=f"Signed in to GitHub as {login}.")
+        if then:
+            then()
+
+    def load_best(self):
+        """Your own clean best laps with their library status (refreshes the Best laps folder first)."""
+        save_best_laps(REF_DIR, BEST_DIR)
+        tv = self.best_tv
+        keep = set(tv.selection())
+        tv.delete(*tv.get_children())
+        idx = self._lib_index
+        shared = self.cfg.get("shared_laps") or {}
+        try:
+            names = sorted(f for f in os.listdir(BEST_DIR) if f.endswith(".json"))
+        except OSError:
+            names = []
+        for name in names:
+            if not os.path.exists(os.path.join(REF_DIR, name)):
+                continue                  # the reference was deleted (or replaced by a library lap)
+            try:
+                with open(os.path.join(BEST_DIR, name), "rb") as fh:
+                    data = fh.read()
+                d = json.loads(data.decode("utf-8"))
+            except Exception:
+                continue
+            sha = git_blob_sha(data)
+            rec = shared.get(name) or {}
+            if idx is not None and idx.get(name) == sha:
+                status = "In the library ✓"
+            elif rec.get("sha") == sha and rec.get("status") == "proposed":
+                status = rec.get("verdict") or "Sent · being checked"
+            elif rec.get("sha") == sha and rec.get("status") == "refused":
+                status = "Not added: " + str(rec.get("url"))
+            elif rec.get("sha") == sha:
+                status = "In the library ✓"
+            elif idx is not None and name in idx:
+                status = "Library has a different lap"
+            elif rec:
+                status = "Faster than the lap you shared"
+            else:
+                status = "Not shared"
+            k = d.get("key") or ["", "", ""]
+            tv.insert("", "end", iid=name, values=(k[0], k[1].replace("_", " "), k[2].replace("_", " "),
+                                                   fmt_time(d.get("best_time") or 0).replace(" ", ":"),
+                                                   d.get("saved", ""), status))
+        for n in keep:
+            if tv.exists(n):
+                tv.selection_add(n)
+        if not names:
+            self.best_lbl.configure(text="No best laps yet: drive a clean lap and it's saved here.")
+        if self.cfg.get("shared_refs", True) and time.monotonic() - self._lib_index_t > 600:
+            self._lib_index_t = time.monotonic()
+
+            pending = {n: r for n, r in shared.items() if r.get("status") == "proposed" and not r.get("verdict")}
+
+            def fetch():
+                try:
+                    idx = {it["name"]: it["sha"] for it in list_library()}
+                except Exception as e:
+                    file_log(f"Library list failed: {e}")
+                    return
+                verdicts = {}
+                for n, r in pending.items():         # sent laps the library doesn't have: did the check refuse them?
+                    m = re.search(r"/pull/(\d+)", str(r.get("url")))
+                    if not m or idx.get(n) == r.get("sha"):
+                        continue
+                    try:
+                        pr = _gh_call("GET", f"{GITHUB_API}/repos/{UPDATE_REPO}/pulls/{m.group(1)}",
+                                      self.cfg.get("github_token") or None, timeout=8.0)
+                        if pr.get("state") == "closed":
+                            verdicts[n] = "Not added (View on GitHub says why)"
+                    except Exception:
+                        pass
+                self.post(lib_index=(idx, verdicts))
+            threading.Thread(target=fetch, daemon=True, name="library-list").start()
+
+    def open_best_folder(self):
+        save_best_laps(REF_DIR, BEST_DIR)
+        os.makedirs(BEST_DIR, exist_ok=True)
+        self._open(BEST_DIR)
+
+    def view_best(self):
+        sel = self.best_tv.selection()
+        rec = (self.cfg.get("shared_laps") or {}).get(sel[0]) if sel else None
+        if rec and str(rec.get("url", "")).startswith("http"):
+            self._open(rec["url"])
+        else:
+            self._open(f"{GITHUB_WEB}/{UPDATE_REPO}/tree/main/references")
+
+    def share_all_best(self):
+        self.load_best()
+        names = [n for n in self.best_tv.get_children()
+                 if not str(self.best_tv.set(n, "status")).startswith(("In the library", "Sent", "Not added"))]
+        if not names:
+            self.best_lbl.configure(text="Nothing new to share: every best lap is in the library, on its way, or "
+                                         "slower than the library's.")
+            return
+        self.share_best(names)
+
+    def share_best(self, names):
+        from tkinter import messagebox
+        names = [n for n in names if os.path.exists(os.path.join(BEST_DIR, n))]
+        if not names:
+            self.best_lbl.configure(text="Select one of your best laps first.")
+            return
+        if not self._gh_client_id():                 # not set up for in-app sharing: the GitHub upload page
+            os.makedirs(BEST_DIR, exist_ok=True)
+            self._open(BEST_DIR)
+            self._open(f"{GITHUB_WEB}/{UPDATE_REPO}/upload/main/references")
+            self.best_lbl.configure(text=f"Drag {', '.join(names)} from the folder that opened onto the GitHub "
+                                         f"page, then Commit (others propose it and the owner approves).")
+            return
+        if not self.cfg.get("github_token"):
+            self.github_sign_in(then=lambda: self.share_best(names))
+            return
+        if getattr(self, "_sharing", False):
+            return
+        n = len(names)
+        if not messagebox.askyesno("SimCoach", f"Share {n} best lap{'s' if n != 1 else ''} to the public SimCoach "
+                                               "library?\n\nShared: sim, track, car and the lap trace. Your GitHub "
+                                               "username shows on the submission."):
+            return
+        self._sharing = True
+        self.best_lbl.configure(text=f"Sharing {n} lap{'s' if n != 1 else ''}…")
+        token = self.cfg["github_token"]
+
+        def work():
+            results, errors = {}, []
+            for name in names:
+                try:
+                    with open(os.path.join(BEST_DIR, name), "rb") as fh:
+                        data = fh.read()
+                    d = json.loads(data.decode("utf-8"))
+                    k = d["key"]
+                    title = f"Best lap: {k[0]} · {k[1]} · {k[2]} · {fmt_time(d.get('best_time') or 0)}"
+                    kind, url = upload_library_lap(token, name, data, title, log=self.log)
+                    results[name] = {"sha": git_blob_sha(data), "status": kind, "url": url,
+                                     "time": d.get("best_time"),
+                                     "when": time.strftime("%Y-%m-%d %H:%M")}
+                except GitHubError as e:
+                    errors.append((name, str(e), e.status))
+                    if e.status == 401:
+                        break
+                except Exception as e:
+                    errors.append((name, f"{type(e).__name__}: {e}", 0))
+            self.post(best_shared=(results, errors))
+        threading.Thread(target=work, daemon=True, name="share-laps").start()
+
+    def _best_shared(self, ev):
+        results, errors = ev
+        self._sharing = False
+        shared = dict(self.cfg.get("shared_laps") or {})
+        shared.update(results)
+        self.cfg["shared_laps"] = shared
+        if any(st == 401 for _n, _m, st in errors):
+            self.cfg["github_token"] = ""
+            self.cfg["github_login"] = ""
+            self._gh_label()
+        save_config(self.cfg)
+        refused = {n: r for n, r in results.items() if r["status"] == "refused"}
+        added = sum(1 for r in results.values() if r["status"] == "added")
+        sent = sum(1 for r in results.values() if r["status"] == "proposed")
+        parts = []
+        if added:
+            parts.append(f"{added} added to the library (everyone gets {'them' if added > 1 else 'it'} at their "
+                         f"next library check)")
+        if sent:
+            parts.append(f"{sent} sent: checked and added to the library automatically in a minute or two")
+        for n, r in refused.items():
+            parts.append(f"{n[:-5].replace('__', ' · ')} not added: {r['url']}")
+        for name, msg, st in errors:
+            self.log(f"Couldn't share {name}: {msg}")
+        if errors:
+            parts.append(f"{len(errors)} not shared: {errors[0][1]}"
+                         + (" (sign in again)" if any(st == 401 for _n, _m, st in errors) else ""))
+        self.best_lbl.configure(text=("; ".join(parts) + ".") if parts else "")
+        if added:
+            self._lib_index_t = 0.0      # re-read the library's list
+        self.load_best()
 
     def delete_ref(self):
         from tkinter import messagebox
@@ -12926,6 +13441,21 @@ class App:
                     lbl.configure(text=self.controls.describe(a))
             if "keytest" in merged:
                 self.key_lbl.configure(text=merged["keytest"])
+            if "gh_signed_in" in merged:
+                self._gh_signed_in(merged["gh_signed_in"])
+            if "gh_error" in merged:
+                self.best_lbl.configure(text=merged["gh_error"])
+            if "best_shared" in merged:
+                self._best_shared(merged["best_shared"])
+            if "lib_index" in merged:
+                self._lib_index, verdicts = merged["lib_index"]
+                if verdicts:
+                    shared = self.cfg.get("shared_laps") or {}
+                    for n, v in verdicts.items():
+                        if n in shared:
+                            shared[n]["verdict"] = v
+                    save_config(self.cfg)
+                self.load_best()
             if "library_sync" in merged:
                 if merged["library_sync"]:
                     self.share_lbl.configure(text=merged["library_sync"])
