@@ -67,7 +67,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.8"
+APP_VERSION = "6.9"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -4999,6 +4999,224 @@ _STARTER_DATA = None
 
 
 _STARTER_NAMES = None
+# Benchmark lap times by sim and car class (quick, repeatable laps from setup shops, leaderboards and league
+# results; times only). Starter laps are tuned to them and the coach quotes them as a target. The library's
+# references/benchmarks/laps.json (downloaded to BENCH_PATH) replaces this copy. Rebuilt by
+# tools/references/make_benchmarks.py.
+BENCH_PATH = os.path.join(APP_DIR, "benchmarks.json")
+STARTER_BENCH = json.loads("".join((
+    "{\"tracks\":{\"Nordschleife\":{\"spoken\":\"the Nordschleife\",\"phrases\":[\"nordschleife\"],\"length\":20832},\"Nurburgri",
+    "ng24h\":{\"spoken\":\"the N\\u00fcrburgring 24 hour layout\",\"phrases\":[\"nordschleife\",\"nurburgring\",\"24h\"],\"lengt",
+    "h\":25378},\"LeMans\":{\"spoken\":\"Le Mans\",\"phrases\":[\"le mans\",\"sarthe\"],\"length\":13626},\"RoadAtlanta\":{\"spoken",
+    "\":\"Road Atlanta\",\"phrases\":[\"road atlanta\",\"atlanta\"],\"length\":4088},\"Fuji\":{\"spoken\":\"Fuji\",\"phrases\":[\"fuj",
+    "i\"],\"length\":4563},\"DaytonaRoad\":{\"spoken\":\"the Daytona road course\",\"phrases\":[\"daytona\"],\"length\":5730},\"J",
+    "erez\":{\"spoken\":\"Jerez\",\"phrases\":[\"jerez\"],\"length\":4428},\"Zhuhai\":{\"spoken\":\"Zhuhai\",\"phrases\":[\"zhuhai\"],",
+    "\"length\":4319},\"Bathurst\":{\"spoken\":\"Bathurst\",\"phrases\":[\"bathurst\",\"mount panorama\",\"panorama\"],\"length\":6",
+    "213},\"SilverstoneNational\":{\"spoken\":\"Silverstone National\",\"phrases\":[\"silverstone\"],\"length\":2639},\"Silver",
+    "stone2008\":{\"spoken\":\"the old Silverstone Grand Prix layout\",\"phrases\":[\"silverstone\"],\"length\":5141},\"India",
+    "napolisRoad\":{\"spoken\":\"the Indianapolis road course\",\"phrases\":[\"indianapolis\",\"indy\"],\"length\":3925},\"Indi",
+    "anapolisGP\":{\"spoken\":\"Indianapolis\",\"phrases\":[\"indianapolis\",\"indy\"],\"length\":4170},\"TheBend\":{\"spoken\":\"T",
+    "he Bend\",\"phrases\":[\"the bend\",\"bend motorsport\"],\"length\":7770},\"Motegi\":{\"spoken\":\"Motegi\",\"phrases\":[\"mot",
+    "egi\"],\"length\":4801},\"CharlotteRoval\":{\"spoken\":\"the Charlotte Roval\",\"phrases\":[\"charlotte\"],\"length\":3670}",
+    ",\"Misano\":{\"spoken\":\"Misano\",\"phrases\":[\"misano\"],\"length\":4226},\"Zolder\":{\"spoken\":\"Zolder\",\"phrases\":[\"zol",
+    "der\"],\"length\":4011},\"Donington\":{\"spoken\":\"Donington\",\"phrases\":[\"donington\"],\"length\":4020},\"LagunaSeca\":{",
+    "\"spoken\":\"Laguna Seca\",\"phrases\":[\"laguna seca\",\"laguna\"],\"length\":3602},\"OultonPark\":{\"spoken\":\"Oulton Park",
+    "\",\"phrases\":[\"oulton\"],\"length\":4307},\"Snetterton\":{\"spoken\":\"Snetterton\",\"phrases\":[\"snetterton\"],\"length\":",
+    "4779},\"Valencia\":{\"spoken\":\"Valencia\",\"phrases\":[\"valencia\",\"ricardo tormo\"],\"length\":4005},\"LongBeach\":{\"sp",
+    "oken\":\"Long Beach\",\"phrases\":[\"long beach\"],\"length\":3167},\"Sebring\":{\"spoken\":\"Sebring\",\"phrases\":[\"sebring",
+    "\"],\"length\":6019},\"MidOhio\":{\"spoken\":\"Mid-Ohio\",\"phrases\":[\"mid ohio\"],\"length\":3634},\"RoadAmerica\":{\"spoke",
+    "n\":\"Road America\",\"phrases\":[\"road america\"],\"length\":6515}},\"laps\":[[\"ACC\",\"gt3\",\"Catalunya\",102.782,null,\"",
+    "SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"BrandsHatch\",82.5,null,\"SimRacingAlliance D1 reference\"],[\"AC",
+    "C\",\"gt3\",\"Austin\",124.607,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Donington\",85.91,null,\"SimRac",
+    "ingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Budapest\",102.443,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt",
+    "3\",\"Imola\",99.949,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"IndianapolisGP\",94.863,null,\"SimRacin",
+    "gAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Kyalami\",99.805,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"",
+    "LagunaSeca\",81.301,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Misano\",92.698,null,\"SimRacingAllian",
+    "ce D1 reference\"],[\"ACC\",\"gt3\",\"Monza\",106.711,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Bathurst",
+    "\",119.575,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Nurburgring24h\",490.0,null,\"SimRacingAlliance",
+    " D1 reference\"],[\"ACC\",\"gt3\",\"Nuerburgring\",113.255,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Oul",
+    "tonPark\",92.485,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"PaulRicard\",112.906,null,\"SimRacingAlli",
+    "ance D1 reference\"],[\"ACC\",\"gt3\",\"Spielberg\",87.629,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Sil",
+    "verstone\",116.848,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Snetterton\",105.596,null,\"SimRacingAl",
+    "liance D1 reference\"],[\"ACC\",\"gt3\",\"Spa\",136.434,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Suzuka",
+    "\",118.666,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Valencia\",89.735,null,\"SimRacingAlliance D1 r",
+    "eference\"],[\"ACC\",\"gt3\",\"WatkinsGlen\",103.244,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Zandvoort",
+    "\",94.706,null,\"SimRacingAlliance D1 reference\"],[\"ACC\",\"gt3\",\"Zolder\",87.578,null,\"SimRacingAlliance D1 refe",
+    "rence\"],[\"iRacing\",\"gt3\",\"Montreal\",92.329,null,\"HYMO Setups / Apex Racing Academy / Coach Dave Academy refe",
+    "rence\"],[\"iRacing\",\"gt3\",\"TheBend\",173.188,null,\"HYMO Setups / Apex Racing Academy / Coach Dave Academy refe",
+    "rence\"],[\"iRacing\",\"gt3\",\"Spielberg\",88.303,null,\"HYMO Setups / Apex Racing Academy / Coach Dave Academy ref",
+    "erence\"],[\"iRacing\",\"gt3\",\"Motegi\",109.4,null,\"HYMO Setups / Apex Racing Academy / Coach Dave Academy refere",
+    "nce\"],[\"iRacing\",\"gt3\",\"IndianapolisRoad\",82.441,null,\"HYMO Setups / Apex Racing Academy / Coach Dave Academ",
+    "y reference\"],[\"iRacing\",\"gt4\",\"CharlotteRoval\",80.841,null,\"HYMO Setups reference\"],[\"iRacing\",\"proto\",\"Cha",
+    "rlotteRoval\",70.812,[\"p320\",\"lmp3\"],\"HYMO Setups reference\"],[\"iRacing\",\"proto\",\"Montreal\",83.397,[\"valkyrie",
+    "\"],\"HYMO Setups reference\"],[\"iRacing\",\"proto\",\"Montreal\",83.518,[\"arx\"],\"HYMO Setups reference\"],[\"iRacing\"",
+    ",\"proto\",\"Montreal\",83.647,[\"963\"],\"HYMO Setups reference\"],[\"iRacing\",\"proto\",\"Montreal\",83.965,[\"499p\"],\"H",
+    "YMO Setups reference\"],[\"iRacing\",\"proto\",\"Montreal\",88.416,[\"p217\",\"lmp2\"],\"HYMO Setups reference\"],[\"iRaci",
+    "ng\",\"proto\",\"Silverstone2008\",87.084,[\"919\"],\"iRacing track record (Fernando Horta database)\"],[\"iRacing\",\"p",
+    "roto\",\"WatkinsGlen\",84.103,[\"919\"],\"iRacing track record (Fernando Horta database)\"],[\"iRacing\",\"proto\",\"Mug",
+    "ello\",80.869,[\"919\"],\"iRacing track record (Fernando Horta database)\"],[\"iRacing\",\"proto\",\"SaoPaulo\",75.906,",
+    "[\"919\"],\"iRacing track record (Fernando Horta database)\"],[\"iRacing\",\"proto\",\"Monza\",88.594,[\"919\"],\"iRacing",
+    " track record (Fernando Horta database)\"],[\"AC\",\"gt3\",\"Nordschleife\",386.232,null,\"Track Titan top lap\"],[\"r",
+    "Factor 2\",\"gt3\",\"Monza\",109.094,null,\"league result (Simresults)\"],[\"rFactor 2\",\"gte\",\"MidOhio\",85.398,[\"c6\"",
+    "],\"rFactor 2 record (Fernando Horta database)\"],[\"rFactor 2\",\"gte\",\"Sebring\",123.31,[\"c6\"],\"rFactor 2 record",
+    " (Fernando Horta database)\"],[\"AMS2\",\"gt3\",\"SaoPaulo\",86.236,null,\"AMS2 leaderboards (GT3 Gen2)\"],[\"AMS2\",\"g",
+    "t3\",\"Catalunya\",100.162,null,\"AMS2 leaderboards (GT3 Gen2)\"],[\"AMS2\",\"gt3\",\"Monza\",106.433,null,\"AMS2 leader",
+    "boards (GT3 Gen2)\"],[\"AMS2\",\"gt3\",\"Jerez\",95.721,null,\"AMS2 leaderboards (GT3 Gen2)\"],[\"AMS2\",\"gt3\",\"BrandsH",
+    "atch\",82.152,null,\"AMS2 leaderboards (GT3 Gen2)\"],[\"AMS2\",\"gt3\",\"DaytonaRoad\",102.303,null,\"AMS2 leaderboard",
+    "s (GT3 Gen2)\"],[\"AMS2\",\"formula\",\"RoadAmerica\",109.925,[\"reynard\"],\"AMS2 leaderboard\"],[\"LMU\",\"gt3\",\"Spa\",13",
+    "7.732,null,\"LMU leaderboards and race results\"],[\"LMU\",\"gt3\",\"Imola\",102.355,null,\"LMU leaderboards and race",
+    " results\"],[\"LMU\",\"gt3\",\"Fuji\",99.981,null,\"LMU leaderboards and race results\"],[\"LMU\",\"gt3\",\"SaoPaulo\",91.0",
+    "39,null,\"LMU leaderboards and race results\"],[\"LMU\",\"gt3\",\"LeMans\",233.398,null,\"LMU leaderboards and race r",
+    "esults\"],[\"LMU\",\"gt3\",\"Monza\",109.815,null,\"LMU leaderboards and race results\"],[\"LMU\",\"gt3\",\"LongBeach\",80.",
+    "969,null,\"LMU leaderboards and race results\"],[\"LMU\",\"gt3\",\"Sakhir\",118.476,null,\"LMU leaderboards and race ",
+    "results\"],[\"LMU\",\"proto\",\"LeMans\",202.564,null,\"LMU / WEC reference\"],[\"LMU\",\"proto\",\"Sakhir\",104.586,[\"cadi",
+    "llac\",\"v series\"],\"LMU leaderboard\"],[\"F1 25\",\"f1\",\"Spa\",101.749,null,\"F1 24 time trial, top 5 % (SimRacingS",
+    "etup)\"],[\"F1 25\",\"f1\",\"Monza\",78.95,null,\"F1 24 time trial, top 5 % (SimRacingSetup)\"],[\"F1 25\",\"f1\",\"Zandvo",
+    "ort\",69.1,null,\"F1 24 time trial, top 5 % (SimRacingSetup)\"],[\"*\",\"gt3\",\"Spa\",136.4,null,\"GT3 leaderboards (",
+    "sim not recorded)\"],[\"*\",\"gt3\",\"Monza\",106.35,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"Suzuka",
+    "\",117.475,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"Spielberg\",86.867,null,\"GT3 leaderboards (",
+    "sim not recorded)\"],[\"*\",\"gt3\",\"Catalunya\",100.162,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"S",
+    "aoPaulo\",86.236,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"Imola\",103.364,null,\"GT3 leaderboard",
+    "s (sim not recorded)\"],[\"*\",\"gt3\",\"Mugello\",107.222,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"",
+    "Nuerburgring\",115.416,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"Hockenheim\",97.522,null,\"GT3 l",
+    "eaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"Oschersleben\",81.16,null,\"GT3 leaderboards (sim not recorded)\"]",
+    ",[\"*\",\"gt3\",\"BrandsHatch\",82.152,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"Sakhir\",118.476,nul",
+    "l,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"RoadAtlanta\",78.395,null,\"GT3 leaderboards (sim not rec",
+    "orded)\"],[\"*\",\"gt3\",\"Nordschleife\",394.067,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"Zhuhai\",9",
+    "2.485,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"Bathurst\",124.202,null,\"GT3 leaderboards (sim ",
+    "not recorded)\"],[\"*\",\"gt3\",\"Fuji\",101.488,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"DaytonaRoa",
+    "d\",107.282,null,\"GT3 leaderboards (sim not recorded)\"],[\"*\",\"gt3\",\"SilverstoneNational\",52.62,null,\"GT3 lead",
+    "erboards (sim not recorded)\"],[\"*\",\"gt3\",\"Jerez\",95.721,null,\"GT3 leaderboards (sim not recorded)\"]]}",
+)))
+_BENCH = None
+_GRIP = {}
+_BENCH_CLASSES = ("gt3", "gt4", "cup", "gte", "proto", "f1", "formula", "road")
+_RE_PHRASE = re.compile(r"[a-z0-9]+( [a-z0-9]+)*")
+
+
+def bench_problem(d):
+    """None if d is a usable benchmark file, else what's wrong."""
+    try:
+        if not isinstance(d, dict) or not isinstance(d.get("tracks"), dict) or not isinstance(d.get("laps"), list):
+            return "not a benchmark file"
+        if len(d["laps"]) > 5000 or len(d["tracks"]) > 1000:
+            return "too big"
+        for k, o in d["tracks"].items():
+            if not (re.fullmatch(r"[A-Za-z0-9]{2,40}", k) and isinstance(o, dict)
+                    and isinstance(o.get("spoken"), str) and 2 <= len(o["spoken"]) <= 60 and o["spoken"].isprintable()
+                    and isinstance(o.get("phrases"), list) and 1 <= len(o["phrases"]) <= 10
+                    and all(isinstance(x, str) and _RE_PHRASE.fullmatch(x) for x in o["phrases"])
+                    and type(o.get("length")) in (int, float) and 500 <= o["length"] <= 30000):
+                return "bad track"
+        for row in d["laps"]:
+            if not (isinstance(row, list) and len(row) >= 5):
+                return "bad lap row"
+            sim, cls, tid, secs, car = row[:5]
+            if not (isinstance(sim, str) and 1 <= len(sim) <= 30 and cls in _BENCH_CLASSES
+                    and isinstance(tid, str) and re.fullmatch(r"[A-Za-z0-9]{2,40}", tid)
+                    and type(secs) in (int, float) and 20 <= secs <= 1800
+                    and (car is None or (isinstance(car, list) and 1 <= len(car) <= 10
+                                         and all(isinstance(x, str) and _RE_PHRASE.fullmatch(x) for x in car)))):
+                return "bad lap row"
+    except Exception as e:
+        return f"unreadable ({e})"
+    return None
+
+
+def benchmarks():
+    global _BENCH
+    if _BENCH is None:
+        d = None
+        try:
+            with open(BENCH_PATH, encoding="utf-8") as fh:
+                d = json.load(fh)
+            if bench_problem(d):
+                d = None
+        except Exception:
+            d = None
+        _BENCH = d or STARTER_BENCH
+    return _BENCH
+
+
+def benchmarks_changed():
+    global _BENCH
+    _BENCH = None
+    _GRIP.clear()
+
+
+def benchmark_track(game, track, track_len):
+    """The benchmark-only track (one without a starter lap) this sim track is: (id, spoken name), or None."""
+    if game in RALLY_GAMES or not track_len:
+        return None
+    n = _plain_name(track)
+    if " reverse " in n or " rev " in n:
+        return None
+    best = None
+    for tid, o in benchmarks()["tracks"].items():
+        if any(f" {ph} " in n for ph in o["phrases"]):
+            off = abs(track_len - o["length"]) / o["length"]
+            if off <= 0.03 and (best is None or off < best[0]):
+                best = (off, tid, o["spoken"])
+    return best[1:] if best else None
+
+
+def benchmark_lap(game, car, cls, tid):
+    """A quick lap time (s) for this sim, car class and track id: (seconds, True if it's for this very car), or
+    None. This sim's own times come first, then times whose sim wasn't recorded; a time for the car itself beats
+    one for its class. RaceRoom doesn't report car names, so it gets none."""
+    if not tid or game == "RaceRoom":
+        return None
+    n = _plain_name(car)
+    best = None
+    for row in benchmarks()["laps"]:
+        sim, c, t_id, secs, phrases = row[:5]
+        if t_id != tid or c != cls or sim not in (game, "*"):
+            continue
+        if phrases is not None and not any(f" {ph}" in n for ph in phrases):
+            continue
+        rank = (sim == game, phrases is not None)
+        if best is None or rank > best[0]:
+            best = (rank, float(secs), phrases is not None)
+    return best[1:] if best else None
+
+
+def starter_grip(tid, game, car, cls):
+    """(grip factor, benchmark or None) for a starter lap at track tid: the factor makes the calculated lap for
+    this class match the benchmark for this sim. Without a benchmark for the class, the GT3 correction for the
+    track is used (it mostly corrects the track shape). A benchmark more than 10 % from the calculation, or one that
+    needs a big grip change, is left alone: the car or the layout is too different from the model."""
+    data = _starter_data()
+    if tid not in data:
+        return 1.0, None
+    bench = benchmark_lap(game, car, cls, tid)
+    use_cls, target = (cls, bench[0]) if bench else ("gt3", (benchmark_lap(game, "", "gt3", tid) or (None,))[0])
+    if not target:
+        return 1.0, bench
+    key = (tid, use_cls, target)
+    if key not in _GRIP:
+        L, steps = data[tid]
+        k, acc = [], 0
+        for d in steps:
+            acc += d
+            k.append(acc / 1e5)
+
+        def lap_t(gr):
+            c = dict(STARTER_CARS.get(use_cls, STARTER_CARS["gt3"]))
+            c["mu"], c["mu_brk"] = c["mu"] * gr, c["mu_brk"] * gr
+            return _lap_sim(k, L / BINS, c)[4]
+        g, base = 1.0, lap_t(1.0)
+        if abs(target - base) / base <= 0.10:
+            lo, hi = 0.6, 1.5
+            for _ in range(15):
+                g = (lo + hi) / 2
+                if lap_t(g) > target:
+                    lo = g
+                else:
+                    hi = g
+            if not 0.85 <= g <= 1.2:                 # too big a correction: another layout, or an unusual car
+                g = 1.0
+        _GRIP[key] = g
+    return _GRIP[key], bench
 
 
 def track_file_problem(d):
@@ -5073,6 +5291,7 @@ def starter_tracks():
 def starter_tracks_changed():
     global _STARTER_DATA, _STARTER_NAMES
     _STARTER_DATA = _STARTER_NAMES = None
+    _GRIP.clear()
 
 
 def _plain_name(x):
@@ -5165,7 +5384,7 @@ def _lap_sim(k, ds, car):
     return v, thr, brk, t, acc_t
 
 
-def starter_reference(tid, cls="gt3", shift=0):
+def starter_reference(tid, cls="gt3", shift=0, grip=1.0):
     """A complete SimCoach reference for track tid and car class cls. shift moves the track (in bins) to line it
     up with the sim's start line."""
     data = _starter_data()
@@ -5179,7 +5398,10 @@ def starter_reference(tid, cls="gt3", shift=0):
     if shift:
         shift %= BINS
         k = k[-shift:] + k[:-shift]
-    v, thr, brk, t, lap_t = _lap_sim(k, L / BINS, STARTER_CARS.get(cls, STARTER_CARS["gt3"]))
+    car = dict(STARTER_CARS.get(cls, STARTER_CARS["gt3"]))
+    # grip: from starter_grip(), tunes the lap to a real quick lap here when there's a benchmark
+    car["mu"], car["mu_brk"] = car["mu"] * grip, car["mu_brk"] * grip
+    v, thr, brk, t, lap_t = _lap_sim(k, L / BINS, car)
     ref = {"speed": [round(x * 3.6, 2) for x in v], "thr": thr, "brk": brk, "t": [round(x, 3) for x in t],
            "steer": [0.0] * BINS, "lock": [0] * BINS, "spin": [0] * BINS, "overlap": [0] * BINS}
     corners = find_corners(ref)
@@ -5945,6 +6167,13 @@ class Coach:
         self.ref_provisional, self.ref_source = provisional, source
         self._ref_changed()
 
+    def _target_line(self, bench, cls, where):
+        """' A quick GT3 lap here is about 2 16.4.' for a benchmark (seconds, for this very car), else ''."""
+        if not bench:
+            return ""
+        what = "lap in this car" if bench[1] else f"{self._CLASS_SPOKEN.get(cls, 'GT3 car').replace(' car', '')} lap"
+        return f" A quick {what} {where} is about {fmt_time(bench[0])}."
+
     def _try_starter(self, f, now, name):
         """No lap of the driver's here: an approximate reference from the track shape, if it's a known track."""
         if not self.cfg.get("starter_laps", True):
@@ -5953,17 +6182,19 @@ class Coach:
         if tid is None:
             return False
         cls = car_class(f.game, f.car)
-        st = starter_reference(tid, cls)
+        grip, bench = starter_grip(tid, f.game, f.car, cls)
+        st = starter_reference(tid, cls, grip=grip)
         if not st or len(st["corners"]) < 3:
             return False
         self._install_ref(st, True, "starter")
-        self._starter = {"tid": tid, "cls": cls, "aligned": False, "seen": {}}
+        self._starter = {"tid": tid, "cls": cls, "aligned": False, "grip": grip}
         self._set_focus(self.starter_focus())
         spoken = starter_tracks()[tid][0]
+        target = self._target_line(bench, cls, "here")
         self.say(f"Radio check, {name}. No lap of yours here yet, so I've built a starter lap for {spoken} from the "
-                 f"track layout, set up for a {self._CLASS_SPOKEN.get(cls, 'GT3 car')}. Braking points are approximate. "
-                 f"I'll line it up over the first part of the lap, then call them. Your first lap replaces it.",
-                 now, force=True)
+                 f"track layout, set up for a {self._CLASS_SPOKEN.get(cls, 'GT3 car')}.{target} Braking points are "
+                 f"approximate. I'll line it up over the first part of the lap, then call them. Your first lap "
+                 f"replaces it.", now, force=True)
         return True
 
     _ALIGN_W = 0.08        # how far (fraction of a lap) the sim's start line may sit from the starter lap's
@@ -6012,7 +6243,7 @@ class Coach:
                          now, force=True)
             return
         if abs(best_s) > 3:
-            moved = starter_reference(st["tid"], st["cls"], shift=best_s)
+            moved = starter_reference(st["tid"], st["cls"], shift=best_s, grip=st.get("grip", 1.0))
             if moved and len(moved["corners"]) >= 3:
                 self._install_ref(moved, True, "starter")
                 self._set_focus(self.starter_focus())
@@ -6175,7 +6406,12 @@ class Coach:
                 self.say(f"Radio check, {name}. {f.track}, your best here is {fmt_time(self.best_time)}.{extra} "
                          f"{len(self.corners)} corners mapped, coaching is live.", now, force=True)
             elif not self._try_starter(f, now, name):
-                self.say(f"Radio check, {name}. Give me a clean lap and I'll map the corners.", now, force=True)
+                target = ""
+                bt = benchmark_track(f.game, f.track, f.track_len) if self.cfg.get("starter_laps", True) else None
+                if bt:
+                    cls = car_class(f.game, f.car)
+                    target = self._target_line(benchmark_lap(f.game, f.car, cls, bt[0]), cls, f"at {bt[1]}")
+                self.say(f"Radio check, {name}.{target} Give me a clean lap and I'll map the corners.", now, force=True)
             if self.ref_source in (None, "starter"):
                 self._library_lookup(key, now)
         self.track_len = f.track_len or self.track_len
@@ -10878,6 +11114,34 @@ def list_library(timeout=8.0, api=None):
             and it.get("type", "file") == "file"]
 
 
+def sync_library_benchmarks(timeout=8.0, base=None, path=None, log=print):
+    """Fetch the library's benchmark lap times (references/benchmarks/laps.json). True if they changed here."""
+    import urllib.error
+    path = path or BENCH_PATH
+    try:
+        raw = _library_get((base or LIBRARY_URL) + "benchmarks/laps.json", timeout, limit=1_000_000)
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        return False
+    prob = bench_problem(json.loads(raw.decode("utf-8")))
+    if prob:
+        log(f"Library benchmarks not used: {prob}")
+        return False
+    try:
+        with open(path, "rb") as fh:
+            if fh.read() == raw:
+                return False
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path + ".tmp", "wb") as fh:
+        fh.write(raw)
+    os.replace(path + ".tmp", path)
+    benchmarks_changed()
+    return True
+
+
 def sync_library_tracks(seen, track_dir=None, timeout=8.0, api=None, log=print):
     """Bring the library's starter-lap track shapes (references/tracks/) into TRACK_DIR: new and changed files
     are downloaded, files taken out of the library are removed. Returns the names of the tracks added or updated."""
@@ -12158,7 +12422,9 @@ class App:
                           "are added automatically (your own laps are never replaced).").pack(anchor="w", pady=(4, 0))
         self.ref_tv = self._tree(t, [("sim", "Sim"), ("track", "Track"), ("car", "Car"), ("best", "Best lap"),
                                      ("corners", "Corners"), ("source", "Source"), ("saved", "Updated")],
-                                 (110, 260, 240, 90, 70, 80, 140), 14)
+                                 (110, 260, 240, 90, 70, 80, 140), 12)
+        self.starter_lbl = ttk.Label(t, text="", style="Mut.TLabel", wraplength=980, justify="left")
+        self.starter_lbl.pack(anchor="w", pady=(6, 0))
         self.load_refs()
 
     def _ref_files(self):
@@ -12172,6 +12438,15 @@ class App:
         (each is ~100 KB of JSON; re-reading them all on every report blocked the window)."""
         tv = self.ref_tv
         tv.delete(*tv.get_children())
+        try:
+            names = sorted(v[0].replace("the ", "") for v in starter_tracks().values())
+            bench_ids = {row[2] for row in benchmarks()["laps"]}
+            tuned = sum(1 for k in starter_tracks() if k in bench_ids)
+            self.starter_lbl.configure(
+                text=f"Starter laps (calculated, for every supported sim and any car, used until you set a lap): "
+                     f"{len(names)} circuits, {tuned} tuned to real lap times. " + ", ".join(names) + ".")
+        except Exception:
+            pass
         cache = self.__dict__.setdefault("_ref_rows", {})
         seen = set()
         for f in self._ref_files():
@@ -12767,6 +13042,8 @@ class App:
                     self.cfg["library_tracks_seen"] = tseen
                     if tracks:
                         self.log(f"Starter laps added for: {', '.join(tracks)}")
+                    if sync_library_benchmarks(log=self.log):
+                        self.log("Benchmark lap times updated from the library.")
                 except Exception as e:
                     file_log(f"Library track sync failed: {type(e).__name__}: {e}")
                 save_config(self.cfg)

@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.8)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.9)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -9,6 +9,11 @@
 * **Supported Sims:** AC, ACC, AC Rally, AC EVO*, LMU, rF2, AMS2 (*Shared Memory = Project CARS 2*), RaceRoom, **iRacing**, EA WRC, F1 25 (*UDP 20777, 2025*), DiRT Rally 2.0. Shares port 20777 with SimHub.
 * **Live Coaching & Crew:** First clean lap maps corners for braking tones, focus cues & exit diagnosis. Engineer, Strategist & Spotter call fuel, virtual energy, temps, wear, track limits, rain/wetness, flags, gaps, cars alongside & banter.
 * **Setup, Overlay & Voice:** Click-to-apply setup sheet updates setups directly in-sim. Click-through overlay shows delta & pedal traces. Push-to-talk (wheel/F8), ref sharing, HTML reports & optional AI Q&A (OpenAI, Google Gemini or DeepSeek, with automatic fallback).
+
+### What's new in 6.9
+* **Benchmark lap times for every sim:** 87 quick, repeatable lap times by sim and car class (ACC, iRacing, Le Mans Ultimate, Automobilista 2, rFactor 2, Assetto Corsa and F1) are in the library's [benchmarks](references/benchmarks/laps.json), from setup-shop reference laps, leaderboards and league results. At the start of a session the coach tells you the target for your sim and class ("a quick GT3 lap here is about 2:16.4"), or for your exact car where there is one (e.g. the GTP cars at Montreal). 48 tracks have targets, including ones with no starter lap (Nordschleife, Le Mans, Bathurst, Laguna Seca, Road Atlanta, Long Beach, The Bend and more).
+* **Starter laps tuned to them:** at circuits with a starter lap, the calculated lap is tuned so its lap time matches your sim's benchmark, which moves its corner speeds and braking points toward a real quick lap. Before tuning, the calculated GT3 laps were already within about 4 % of the benchmarks.
+* **References tab** lists the starter-lap circuits.
 
 ### What's new in 6.8
 * **Starter laps at 19 more circuits**, delivered through the library so every SimCoach gets them automatically (no app update needed for future tracks): Imola, Mugello, Monaco, Paul Ricard, Portimão, Kyalami, Watkins Glen, Estoril, Magny-Cours, Istanbul, Singapore, Baku, Jeddah, Miami, Las Vegas, Lusail, Madrid, Buenos Aires and Jacarepaguá. That makes 43 circuits with coaching from lap one, for any supported sim and car. These are calculated laps (approximate braking points, no live delta); your first clean lap replaces them. Track shapes: [bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) (MIT).
