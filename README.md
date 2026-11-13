@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.10)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.10.1)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -25,6 +25,9 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Reports:** an HTML report after each session.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.10.1
+* **Fairer consistency score:** laps more than 2 % off your best (early laps while you learn the track, or a lap spoiled by traffic) are now set aside, so getting quicker through a session no longer counts as being inconsistent. Found in a test session where steady laps after a learning lap were rated "inconsistent, 3.6 seconds".
 
 ### What's new in 6.10
 * **Pace against the target:** the Live tab shows your best lap as a percentage of a quick lap for your sim and class (or exact car), e.g. *103.4% · target 2:16.4*. The coach says it after a new best lap and in the after-race report, the HTML report has it with a "Where you are" verdict, and the Progress table tracks it across sessions. Ask *"what's the target time?"*.

@@ -68,7 +68,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.10"
+APP_VERSION = "6.10.1"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -205,13 +205,14 @@ def stdev(xs):
 
 def consistency_of(times):
     """How repeatable a set of clean lap times is: {"sd": seconds, "pct": sd as % of the best lap, "label",
-    "laps": laps counted, "off": laps left out}. Laps more than 7 % off the best (a spin, traffic, a cool-down)
-    are left out, so one ruined lap doesn't hide an otherwise steady run. None with fewer than 3 laps to judge."""
+    "laps": laps counted, "off": laps left out}. Laps more than 2 % off the best are left out: early laps while
+    the driver is still learning the track, or a lap spoiled by traffic or a moment. So a driver who gets
+    quicker through a session isn't called inconsistent for it. None with fewer than 3 laps to judge."""
     times = [t for t in times if t and t > 0]
     if len(times) < 3:
         return None
     best = min(times)
-    kept = [t for t in times if t <= best * 1.07]
+    kept = [t for t in times if t <= best * 1.02]
     if len(kept) < 3:
         return None
     sd = stdev(kept)
@@ -232,10 +233,10 @@ def pace_advice(pace_pct, cons):
     if pace_pct <= 101.0:
         return "That's right on a quick lap. Now it's about doing it every lap."
     if pace_pct <= 103.0:
-        return ("You're consistent and close: the last second is in your focus corners." if steady else
+        return ("Close to a quick lap: the last second is in your focus corners." if steady else
                 "You're close to a quick lap: tidy up the lap-to-lap variation and it's there.")
     if steady:
-        return "You're consistent, so the time is in technique: work through your focus corners one at a time."
+        return "The time is in technique now: work through your focus corners one at a time."
     return "Smooth, repeatable laps first; the pace follows."
 
 
@@ -7754,7 +7755,7 @@ class Coach:
                 cons = consistency_of(self.session_clean_times())
                 if cons:
                     parts.append(f"You were {cons['label']}: your clean laps varied by about {tenths(cons['sd'])}"
-                                 + (f", not counting {cons['off']} slow lap{'s' if cons['off'] != 1 else ''}" if cons["off"] else "")
+                                 + (f", not counting {cons['off']} slower lap{'s' if cons['off'] != 1 else ''}" if cons["off"] else "")
                                  + ".")
                 elif len(times) >= 2:
                     parts.append(
@@ -10624,7 +10625,7 @@ class Conversation:
             best = self._clean_best()
             advice = pace_advice(c.pace_pct(best) if best else None, cons)
             return (f"You're {cons['label']}: your clean laps vary by about {tenths(cons['sd'])}"
-                    + (f", not counting {cons['off']} slow lap{'s' if cons['off'] != 1 else ''}" if cons["off"] else "")
+                    + (f", not counting {cons['off']} slower lap{'s' if cons['off'] != 1 else ''}" if cons["off"] else "")
                     + "." + (f" {advice}" if advice else ""))
         if self._RE_PACE.search(t):
             clean = [x["time"] for x in hist if not x.get("pit") and not x.get("invalid")][-5:]
