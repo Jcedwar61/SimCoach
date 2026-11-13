@@ -191,6 +191,24 @@ kind, why = sc.upload_library_lap("tok-friend", name, open(os.path.join(best, na
 check(kind == "refused" and "faster" in why and not any(c[0] in ("PUT", "PR") for c in calls),
       f"slower than the library's lap: not sent ({why})")
 
+# automatic sharing: which laps are due, and sharing them in one go
+C2 = ("LMU", "imola", "ferrari 296 lmgt3")
+json.dump(lap(C2, t=138.0), open(os.path.join(refs, sc.library_file_name(C2)), "w"))
+sc.save_best_laps(refs, best)
+nA, nC = name, sc.library_file_name(C2)
+shaA = sc.git_blob_sha(open(os.path.join(best, nA), "rb").read())
+due = sc.laps_to_auto_share(best, refs, {})
+check(due == sorted([nA, nC]), f"nothing shared yet: every best lap is due ({due})")
+check(sc.laps_to_auto_share(best, refs, {nA: {"sha": shaA, "status": "refused"}}) == [nC],
+      "a lap already sent (or turned down) in this form isn't sent again")
+check(sc.laps_to_auto_share(best, refs, {nA: {"sha": "older", "status": "added"}}) == sorted([nA, nC]),
+      "an improved lap is due again")
+calls.clear()
+results, errors = sc.share_laps(best, [nC], "tok-friend", log=lambda m: None)
+check(not errors and results[nC]["status"] == "proposed" and results[nC]["sha"], f"share_laps sends a lap and records it ({results} {errors})")
+results, errors = sc.share_laps(best, [nC, nA], "nope", log=lambda m: None)
+check(not results and len(errors) == 1 and errors[0][2] == 401, "a sign-in failure stops the batch")
+
 # bad token
 try:
     sc.upload_library_lap("nope", name, data2, "x", log=lambda m: None)
