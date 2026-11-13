@@ -123,7 +123,7 @@ try {
     $size = [int]((Get-ChildItem $Dest -Recurse -File | Measure-Object Length -Sum).Sum / 1KB)
     $props = [ordered]@{
         DisplayName          = 'SimCoach'
-        DisplayVersion       = '6.10.1'
+        DisplayVersion       = '6.11'
         Publisher            = 'SimCoach'
         DisplayIcon          = $ico
         InstallLocation      = $Dest

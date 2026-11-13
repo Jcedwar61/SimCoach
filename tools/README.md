@@ -63,6 +63,8 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
   (run it when RaceRoom adds cars)
 - `references/make_benchmarks.py` writes the benchmark lap times (`references/benchmarks/laps.json` and the copy
   built into sim_coach.py); add new times to its table and run it
+- `references/make_osm_tracks.py LOOPS.json` builds library track files from OpenStreetMap raceway outlines
+  (circuit loops in race direction; see the script)
 - `references/make_library_tracks.py F1_CIRCUITS.geojson` builds the library's starter-lap track files
   (`references/tracks/`, needs numpy + scipy) from bacinger/f1-circuits
 - `references/make_starter_laps.py RACELINES_DIR` rebuilds the starter-lap track data embedded in sim_coach.py

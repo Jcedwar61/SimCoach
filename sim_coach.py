@@ -68,7 +68,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.10.1"
+APP_VERSION = "6.11"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -5287,7 +5287,7 @@ def starter_table():
         rows.append((spoken[4:] if spoken.startswith("the ") else spoken, float(data[tid][0]),
                      "Built in" if tid in STARTER_TRACKS else "Library", times, targets(tid)))
     for tid, o in b["tracks"].items():
-        if tid in by_track:
+        if tid in by_track and tid not in data:      # a starter-lap track is listed above already
             name = o["spoken"]
             rows.append((name[4:] if name.startswith("the ") else name, float(o["length"]), "Target times only", {},
                          targets(tid)))
@@ -7982,6 +7982,8 @@ CHATTER_EVENTS = {
     "finish": "the driver just crossed the finish line",
     "pb": "the driver just set a personal best lap",
     "quiet": "a quiet moment on a straight; light, friendly radio banter about the race, the track or the car",
+    "quiet_slow": ("a quiet moment on a straight; the driver is still finding their pace (well off a quick lap or their "
+                   "own best), so be encouraging and patient: do not praise the pace or call the laps quick"),
 }
 CANNED = {
     "start": {"any": ["Right, {driver}, {track} in the {car}. Let's have some fun out there.",
@@ -8010,6 +8012,13 @@ CANNED = {
                              "Good stuff. Every tenth counts out there."],
               "spotter": ["Clear around you. Enjoy the view at {track}.", "All quiet out here. Nice and smooth.",
                           "Nobody near you, mate. Just you and the track."]},
+}
+# a quiet moment while the driver is still well off the pace: no praise for the pace
+CANNED["quiet_slow"] = {
+    "engineer": CANNED["quiet"]["engineer"],
+    "strategist": ["Plenty of laps to build it up, {driver}. One corner at a time.",
+                   "No rush. Clean laps first, the speed follows.", "Keep working at it, the time is in there."],
+    "spotter": CANNED["quiet"]["spotter"],
 }
 
 
@@ -9209,7 +9218,15 @@ class Crew:
             return
         roles = [r for r in ("engineer", "strategist", "spotter") if self.on(r)]
         if roles:
-            self.chatter(random.choice(roles), "quiet", self.facts(f), now)
+            facts = self.facts(f)
+            event = "quiet"
+            last, best = self.lap_times[-1], min(self.lap_times)
+            tg = self.coach.target() if self.coach is not None else None
+            if tg:
+                facts["pace_pct_of_quick_lap"] = round(100.0 * last / tg[0], 1)
+            if (tg and last > tg[0] * 1.03) or last > best * 1.015:
+                event = "quiet_slow"
+            self.chatter(random.choice(roles), event, facts, now)
             self.last_spoken = now
 
     CAR_LEN = 4.8
@@ -9449,6 +9466,11 @@ def write_report(coach, sessions, existing_path=None):
                    f"<td>{x['laps']}</td><td>{_pct(x.get('pace_pct'), '{:.1f}%')}</td>"
                    f"<td>{_pct(x.get('consistency'), '±{:.2f}s')}</td></tr>" for x in sessions[-10:])
     svg = _svg_trace(coach.ref, coach.last_filled, coach.corners)
+    crew = getattr(coach, "crew", None)
+    try:
+        measured_fpl = crew.fuel_per_lap() if crew is not None else None
+    except Exception:
+        measured_fpl = None
     cons = consistency_of(clean_times)
     cons_note = f" · {cons['label']}" if cons else " (σ)"
     tg = coach.target()
@@ -9486,7 +9508,7 @@ svg{{width:100%;height:auto;border:1px solid var(--line);border-radius:10px}} .b
 <div class="k"><span>Theoretical best</span><b>{fmt_time(tb).replace(' ', ':') if tb else '—'}</b></div>
 <div class="k"><span>Laps</span><b>{len(times)}</b></div>
 {pace_kpi}<div class="k"><span>Consistency{cons_note}</span><b>{f"±{cons['sd']:.2f}s" if cons else f"{stdev(ref_times):.2f}s"}</b></div></div>{verdict}
-<p><strong>Next focus:</strong> {focus}.</p>{setup_sheet_html(getattr(coach, "last_setup_sheet", None))}{f'<p><strong>Pre-race setup (Strategist &amp; Coach):</strong> {html.escape(coach.last_setup_briefing["strategist"].replace("k p h", "km/h"))} {html.escape(coach.last_setup_briefing["coach"].replace("k p h", "km/h"))}</p>' if getattr(coach, "last_setup_briefing", None) else ''}
+<p><strong>Next focus:</strong> {focus}.</p>{setup_sheet_html(sheet_with_measured_fuel(getattr(coach, "last_setup_sheet", None), measured_fpl, game))}{f'<p><strong>Pre-race setup (Strategist &amp; Coach):</strong> {html.escape(coach.last_setup_briefing["strategist"].replace("k p h", "km/h"))} {html.escape(coach.last_setup_briefing["coach"].replace("k p h", "km/h"))}</p>' if getattr(coach, "last_setup_briefing", None) else ''}
 {drills_html}<h2>Speed trace</h2><div class="legend"><span><i style="background:var(--acc)"></i>Best lap</span><span><i style="background:var(--acc2)"></i>Last lap</span></div>{svg}
 <h2>Turn by turn</h2><div class="wrap"><table><tr><th>Corner</th><th>Avg loss vs your best</th><th>Variation</th><th>Best min speed (km/h)</th><th>Lock-ups</th><th>Wheelspin</th><th>Most common issue</th></tr>{trows}</table></div>
 <h2>Laps</h2><div class="wrap"><table><tr><th>Lap</th><th>Time</th><th>Gap to best</th></tr>{lrows}</table></div>
@@ -9885,6 +9907,17 @@ def _radio_steps(text):
 _RE_SETUP_WORD = re.compile(r"(?i)\b(wing|bias|pressures?|psi|bar|fuel|litres?|liters?|kilos?|kg|anti-roll|arb|preload|diff\w*|"
                             r"tc|abs|traction|rake|ride height|damp\w*|bump|rebound|toe|camber|ducts?|compound|wets|slicks|"
                             r"stops?|stint|springs?|gear\w*|downforce|splitter|brake|engine map|map|clicks?|mm|millimetres?)\b")
+
+
+def sheet_with_measured_fuel(sheet, fpl, game):
+    """The setup sheet with its 'Use per lap' row replaced by the fuel actually used, once laps have measured it
+    (the sheet is made at the start of a session, when that's still a guess)."""
+    if not sheet or not fpl:
+        return sheet
+    out = dict(sheet)
+    out["items"] = [(a, st, f"{fpl:.1f} {fuel_unit(game)} (measured this session)" if (a, st) == ("Fuel", "Use per lap") else ch)
+                    for a, st, ch in (sheet.get("items") or [])]
+    return out
 
 
 def setup_sheet_html(sheet):
