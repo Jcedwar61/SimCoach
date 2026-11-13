@@ -68,7 +68,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.9.1"
+APP_VERSION = "6.10"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -123,6 +123,7 @@ DEFAULT_CONFIG = {
     "starter_laps": True,
     "shared_refs": True,
     "sheet_autopop": True,
+    "auto_share": False,
     "update_skip": "",
     "library_seen": {},
     "library_tracks_seen": {},
@@ -200,6 +201,42 @@ def stdev(xs):
         return 0.0
     m = sum(xs) / len(xs)
     return math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
+
+
+def consistency_of(times):
+    """How repeatable a set of clean lap times is: {"sd": seconds, "pct": sd as % of the best lap, "label",
+    "laps": laps counted, "off": laps left out}. Laps more than 7 % off the best (a spin, traffic, a cool-down)
+    are left out, so one ruined lap doesn't hide an otherwise steady run. None with fewer than 3 laps to judge."""
+    times = [t for t in times if t and t > 0]
+    if len(times) < 3:
+        return None
+    best = min(times)
+    kept = [t for t in times if t <= best * 1.07]
+    if len(kept) < 3:
+        return None
+    sd = stdev(kept)
+    pct = 100.0 * sd / best
+    label = ("very consistent" if pct < 0.3 else "consistent" if pct < 0.7 else "a bit up and down" if pct < 1.2
+             else "inconsistent")
+    return {"sd": sd, "pct": pct, "label": label, "laps": len(kept), "off": len(times) - len(kept)}
+
+
+def pace_advice(pace_pct, cons):
+    """One line on what to work on, from pace (% of the target lap, or None) and consistency_of()'s result."""
+    steady = cons is not None and cons["pct"] < 0.7
+    if cons is not None and cons["pct"] >= 1.2:
+        return "Work on consistency first: aim for five laps within half a second before chasing lap time."
+    if pace_pct is None:
+        return ("You're repeating your laps well, so start pushing your braking points one corner at a time."
+                if steady else "")
+    if pace_pct <= 101.0:
+        return "That's right on a quick lap. Now it's about doing it every lap."
+    if pace_pct <= 103.0:
+        return ("You're consistent and close: the last second is in your focus corners." if steady else
+                "You're close to a quick lap: tidy up the lap-to-lap variation and it's there.")
+    if steady:
+        return "You're consistent, so the time is in technique: work through your focus corners one at a time."
+    return "Smooth, repeatable laps first; the pace follows."
 
 
 _LOG_LOCK = threading.Lock()
@@ -1951,7 +1988,7 @@ class R3EReader(Reader):
         track = f"{_cstr(b, 600, 64)} {_cstr(b, 664, 64)}".strip()
         ts = _U_4f(b, 1648)
         wk = [abs(x) * 3.6 for x in ts] if all(x != -1.0 and x == x for x in ts) else None
-        fr = Frame("RaceRoom", track, f"car {_i(b, 1196 + 72)}", max(0, _i(b, 1028)), max(0.0, _f(b, 1044)) % 1.0,
+        fr = Frame("RaceRoom", track, raceroom_car(_i(b, 1196 + 72)), max(0, _i(b, 1028)), max(0.0, _f(b, 1044)) % 1.0,
                    _f(b, 1392) * 3.6, _f(b, 1504), _f(b, 1512), _f(b, 1524), _i(b, 1408),
                    _f(b, 1396) * 60 / (2 * math.pi), max(0.0, _f(b, 1100)), max(0.0, _f(b, 1084)),
                    _i(b, 848) > 0, False, _f(b, 1456), tl if tl > 500 else None,
@@ -5164,8 +5201,8 @@ def benchmark_track(game, track, track_len):
 def benchmark_lap(game, car, cls, tid):
     """A quick lap time (s) for this sim, car class and track id: (seconds, True if it's for this very car), or
     None. This sim's own times come first, then times whose sim wasn't recorded; a time for the car itself beats
-    one for its class. RaceRoom doesn't report car names, so it gets none."""
-    if not tid or game == "RaceRoom":
+    one for its class. A RaceRoom car SimCoach can't put in a class gets none."""
+    if not tid or (game == "RaceRoom" and raceroom_class(car) is None):
         return None
     n = _plain_name(car)
     best = None
@@ -5355,9 +5392,115 @@ def starter_track(game, track, track_len):
     return None
 
 
+# RaceRoom's shared memory only gives a car's numeric model id. Names and classes: Sector3 Studios' r3e-data.json
+# (github.com/sector3studios/r3e-spectator-overlay). Rebuild with tools/references/make_raceroom_cars.py.
+RACEROOM_CARS_B64 = (
+    "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"
+)
+_R3E = None
+_R3E_CLASSES = (   # words in RaceRoom's class name -> SimCoach car class; first match wins
+    ("formula", ("formula", "fr", "fr2", "fr3", "frj", "f4", "frx")),
+    ("road", ("wtcr", "wtcc", "touring", "tcr", "nationals", "drift", "mx")),
+    ("gt4", ("gtr 4", "gt4")),
+    ("cup", ("cup", "carrera")),
+    ("gte", ("gtr 2", "gte", "gt2", "gtr 1", "gto")),
+    ("gt3", ("gtr 3", "gt masters", "gt3", "dtm 2021", "dtm 2023", "dtm 2024", "dtm 2025", "dtm 2026",
+             "dtm esports 2022")),
+    ("proto", ("p1", "p2", "hypercars", "group c", "dpi")),
+)
+
+
+def _raceroom():
+    """({model id: (car name, SimCoach class or None)}, {car name: (model id, SimCoach class or None)}). A car
+    that RaceRoom has in several classes gets the class in its name, so every name is one model id."""
+    global _R3E
+    if _R3E is None:
+        try:
+            import base64
+            import zlib
+            raw = json.loads(zlib.decompress(base64.b64decode("".join(RACEROOM_CARS_B64))).decode())
+        except Exception:
+            raw = {}
+        seen = {}
+        for name, _c in raw.values():
+            seen[name] = seen.get(name, 0) + 1
+        by_id, by_name = {}, {}
+        for k, (name, cls_name) in raw.items():
+            n = _plain_name(cls_name)
+            cls = next((c for c, words in _R3E_CLASSES if any(f" {w} " in n for w in words)), None)
+            if cls is None:                          # an unusual class: go by the car's own name, if it says
+                cn = _plain_name(name)
+                cls = next((c for c in ("gt4", "gte", "gt3") if f" {c} " in cn), None)
+            shown = f"{name} ({cls_name})" if seen[name] > 1 and cls_name else name
+            by_id[int(k)] = (shown, cls)
+            by_name[shown] = (int(k), cls)
+        _R3E = (by_id, by_name)
+    return _R3E
+
+
+def raceroom_car(model_id):
+    """The car's name for a RaceRoom model id ('car 1738' when RaceRoom has added a car SimCoach doesn't know)."""
+    hit = _raceroom()[0].get(int(model_id))
+    return hit[0] if hit else f"car {int(model_id)}"
+
+
+def raceroom_class(car):
+    """The SimCoach car class of a RaceRoom car name, or None when it isn't known."""
+    hit = _raceroom()[1].get(car)
+    return hit[1] if hit else None
+
+
 def car_class(game, car):
     if game == "F1 25":
         return "f1"
+    if game == "RaceRoom":
+        return raceroom_class(car) or "gt3"
     n = _plain_name(car)
     for cls, words in _STARTER_CLASS_WORDS:
         if any(f" {w}" in n for w in words):
@@ -5673,8 +5816,35 @@ class Coach:
     def _path(self):
         return os.path.join(self.store_dir, self._RE_SAFE_KEY.sub("_", "__".join(self.key)) + ".json")
 
+    def _adopt_raceroom_legacy(self):
+        """Before 6.10 RaceRoom cars were saved as 'car <model id>'. Move such a reference (and its session history)
+        to the car's real name the first time it's needed."""
+        if not self.key or self.key[0] != "RaceRoom" or os.path.exists(self._path()):
+            return
+        hit = _raceroom()[1].get(self.key[2])
+        if not hit:
+            return
+        old = os.path.join(self.store_dir, self._RE_SAFE_KEY.sub("_", "__".join((self.key[0], self.key[1], f"car {hit[0]}"))) + ".json")
+        try:
+            with open(old, encoding="utf-8") as fh:
+                d = json.load(fh)
+            d["key"] = list(self.key)
+            with open(self._path() + ".tmp", "w", encoding="utf-8") as fh:
+                json.dump(d, fh, separators=(",", ":"))
+            os.replace(self._path() + ".tmp", self._path())
+            os.remove(old)
+            olds = old.replace(".json", ".sessions.json")
+            if os.path.exists(olds) and not os.path.exists(self._sessions_path()):
+                os.replace(olds, self._sessions_path())
+            self.log(f"RaceRoom reference moved to the car's name: {self.key[2]}")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            self.log(f"Couldn't move the old RaceRoom reference: {e}")
+
     def load(self):
         try:
+            self._adopt_raceroom_legacy()
             with open(self._path(), encoding="utf-8") as fh:
                 d = json.load(fh)
             prob = ref_problem(d, need_key=False)
@@ -6018,6 +6188,15 @@ class Coach:
         except Exception:
             return []
 
+    def _session_entry(self, best_t, times, ref_t, clean):
+        """One row of the progress history: best lap, laps, and how the session went against the target."""
+        cons = consistency_of(clean)
+        pace = self.pace_pct(best_t) if clean else None
+        t = self.target()
+        return {"date": self.session_start, "best": best_t, "laps": len(times), "theoretical": self.theoretical_best(),
+                "consistency": stdev(ref_t), "consistency_pct": round(cons["pct"], 3) if cons else None,
+                "pace_pct": round(pace, 2) if pace else None, "target": t[0] if t else None}
+
     def snapshot_report(self):
         """Write a Coach Report for the laps so far without closing the session (no duplicate progress rows)."""
         with self.lock:
@@ -6027,8 +6206,7 @@ class Coach:
             clean = [h["time"] for h in self.history if not h.get("pit") and not h.get("invalid")]
             ref_t = clean or [h["time"] for h in self.history if not h.get("pit")] or times
             best_t = min(ref_t)
-            sess = self.past_sessions() + [{"date": self.session_start, "best": best_t, "laps": len(times),
-                                            "theoretical": self.theoretical_best(), "consistency": stdev(ref_t)}]
+            sess = self.past_sessions() + [self._session_entry(best_t, times, ref_t, clean)]
             try:
                 path = write_report(self, sess, existing_path=self._session_report_path)
             except OSError as e:
@@ -6048,8 +6226,8 @@ class Coach:
             ref_t = clean or [h["time"] for h in self.history if not h.get("pit")] or times
             best_t = min(ref_t)
             sess = self.past_sessions()
-            entry = {"date": self.session_start, "best": best_t, "laps": len(times),
-                     "theoretical": self.theoretical_best(), "consistency": stdev(ref_t), "id": self.session_id}
+            entry = self._session_entry(best_t, times, ref_t, clean)
+            entry["id"] = self.session_id
             if sess and sess[-1].get("id", sess[-1].get("date")) == self.session_id:
                 sess[-1] = entry
             else:
@@ -6315,6 +6493,43 @@ class Coach:
             self.say(f"There's a reference lap for this car and track in the SimCoach library, {fmt_time(self.best_time)}. "
                      f"I'll coach you against it.", time.monotonic(), force=True)
         threading.Thread(target=work, daemon=True, name="ref-library").start()
+
+    def target(self):
+        """The benchmark lap for this sim, track and car: (seconds, True if it's for this very car, class), or
+        None when there isn't one."""
+        key, tl = self.key, self.track_len
+        if not key:
+            return None
+        sig = (key, tl, id(benchmarks()), len(starter_tracks()))
+        if getattr(self, "_target_sig", None) != sig:
+            hit = None
+            try:
+                game, track, car = key
+                tid = starter_track(game, track, tl)
+                if tid is None:
+                    bt = benchmark_track(game, track, tl)
+                    tid = bt[0] if bt else None
+                cls = car_class(game, car)
+                b = benchmark_lap(game, car, cls, tid) if tid else None
+                hit = (b[0], b[1], cls) if b else None
+            except Exception:
+                hit = None
+            self._target_sig, self._target = sig, hit
+        return self._target
+
+    def pace_pct(self, lap_time):
+        """A lap time as a percentage of the target lap (100 = on it), or None without a target."""
+        t = self.target()
+        return 100.0 * lap_time / t[0] if t and lap_time else None
+
+    def target_words(self):
+        t = self.target()
+        if not t:
+            return ""
+        return "a quick lap in this car" if t[1] else f"a quick {self._CLASS_SPOKEN.get(t[2], 'GT3 car').replace(' car', '')} lap"
+
+    def session_clean_times(self):
+        return [h["time"] for h in self.history if not h.get("pit") and not h.get("invalid")]
 
     def theoretical_best(self):
         """Your best lap with every corner replaced by your best-ever run through that corner."""
@@ -7410,6 +7625,10 @@ class Coach:
         parts = [f"{fmt_time(lap_time)}."]
         if pb:
             parts.append(f"Purple lap! New personal best, {tenths(delta)} quicker.")
+            pace = self.pace_pct(lap_time)
+            if pace is not None:
+                parts.append("That beats my target time for " + self.target_words() + "." if pace < 100.0 else
+                             f"That's {pace:.1f} percent of {self.target_words()}.")
         elif excuse and delta >= 0.3:
             parts.append(f"{tenths(delta)} off your best, but {excuse}, so don't read anything into that one.")
         elif delta >= 1.2 and unhinged:
@@ -7532,11 +7751,24 @@ class Coach:
                 )
                 if self.best_time and best_t > self.best_time + 0.05:
                     parts.append(f"Your all-time best here is still the {fmt_time(self.best_time)}.")
-                if len(times) >= 2:
+                cons = consistency_of(self.session_clean_times())
+                if cons:
+                    parts.append(f"You were {cons['label']}: your clean laps varied by about {tenths(cons['sd'])}"
+                                 + (f", not counting {cons['off']} slow lap{'s' if cons['off'] != 1 else ''}" if cons["off"] else "")
+                                 + ".")
+                elif len(times) >= 2:
                     parts.append(
                         f"Your stint consistency was {'rock solid' if sd < 0.35 else 'steady' if sd < 0.7 else 'variable'}, "
                         f"with a lap-to-lap variation of {tenths(sd)}."
                     )
+                pace = self.pace_pct(best_t)
+                if pace is not None:
+                    tg = self.target()
+                    parts.append(f"Against the target of {fmt_time(tg[0])}, {self.target_words()}, your best lap was "
+                                 + ("quicker." if pace < 100.0 else f"{pace:.1f} percent, {tenths(best_t - tg[0])} off."))
+                advice = pace_advice(pace, cons)
+                if advice:
+                    parts.append(advice)
                 tb = self.theoretical_best()
                 if tb and best_t - tb >= 0.08:
                     parts.append(
@@ -7682,6 +7914,10 @@ class Coach:
                 "driver": self.cfg.get("driver_name"),
                 "best_lap_s": round(clean_b, 3) if clean_b else None, "recent_laps_s": laps,
                 "theoretical_best_s": round(tb, 3) if tb else None,
+                "target_lap_s": (self.target() or (None,))[0],
+                "pace_pct_of_target": round(self.pace_pct(clean_b), 1) if clean_b and self.target() else None,
+                "consistency": ((lambda c_: {"spread_s": round(c_["sd"], 2), "rating": c_["label"]} if c_ else None)
+                                (consistency_of(self.session_clean_times()))),
                 "focus": [{"turn": ci + 1, "tip": t} for ci, t in self.focus],
                 "drill": ({"turn": self.drill["ci"] + 1, "lap": self.drill["done"] + 1, "of": self.drill["laps"]}
                           if self.drill else None),
@@ -9168,6 +9404,9 @@ _RE_REPORT_FILE = re.compile(r"(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})_(.*?)(_after_r
 
 def write_report(coach, sessions, existing_path=None):
     import html
+
+    def _pct(x, fmt):
+        return fmt.format(x) if isinstance(x, (int, float)) else "—"
     os.makedirs(REPORT_DIR, exist_ok=True)
     game, track, car = coach.key
     times = [h["time"] for h in coach.history]
@@ -9206,8 +9445,19 @@ def write_report(coach, sessions, existing_path=None):
         lrows_list.append(f"<tr><td>{i + 1}</td><td>{fmt_time(t).replace(' ', ':')}{note}</td><td>{t - best_t:+.2f}</td></tr>")
     lrows = "".join(lrows_list)
     prog = "".join(f"<tr><td>{html.escape(str(x['date']))}</td><td>{fmt_time(x['best']).replace(' ', ':')}</td>"
-                   f"<td>{x['laps']}</td></tr>" for x in sessions[-10:])
+                   f"<td>{x['laps']}</td><td>{_pct(x.get('pace_pct'), '{:.1f}%')}</td>"
+                   f"<td>{_pct(x.get('consistency'), '±{:.2f}s')}</td></tr>" for x in sessions[-10:])
     svg = _svg_trace(coach.ref, coach.last_filled, coach.corners)
+    cons = consistency_of(clean_times)
+    cons_note = f" · {cons['label']}" if cons else " (σ)"
+    tg = coach.target()
+    sess_best = min(clean_times) if clean_times else None
+    pace = coach.pace_pct(sess_best) if sess_best else None
+    pace_kpi = (f'<div class="k"><span>Pace vs target ({fmt_time(tg[0]).replace(" ", ":")}, {html.escape(coach.target_words())})'
+                f'</span><b>{pace:.1f}%</b></div>' if pace is not None else "")
+    advice = pace_advice(pace, cons)
+    verdict = f"<p><strong>Where you are:</strong> {html.escape(advice)}</p>" if advice else ""
+
     def _sgn(x):
         return "—" if x is None else f"{x:+.2f}s"
     drills = getattr(coach, "drills_done", None) or []
@@ -9234,12 +9484,12 @@ svg{{width:100%;height:auto;border:1px solid var(--line);border-radius:10px}} .b
 <div class="kpis"><div class="k"><span>Best lap</span><b>{fmt_time(best_t).replace(' ', ':')}</b></div>
 <div class="k"><span>Theoretical best</span><b>{fmt_time(tb).replace(' ', ':') if tb else '—'}</b></div>
 <div class="k"><span>Laps</span><b>{len(times)}</b></div>
-<div class="k"><span>Consistency (σ)</span><b>{stdev(ref_times):.2f}s</b></div></div>
+{pace_kpi}<div class="k"><span>Consistency{cons_note}</span><b>{f"±{cons['sd']:.2f}s" if cons else f"{stdev(ref_times):.2f}s"}</b></div></div>{verdict}
 <p><strong>Next focus:</strong> {focus}.</p>{setup_sheet_html(getattr(coach, "last_setup_sheet", None))}{f'<p><strong>Pre-race setup (Strategist &amp; Coach):</strong> {html.escape(coach.last_setup_briefing["strategist"].replace("k p h", "km/h"))} {html.escape(coach.last_setup_briefing["coach"].replace("k p h", "km/h"))}</p>' if getattr(coach, "last_setup_briefing", None) else ''}
 {drills_html}<h2>Speed trace</h2><div class="legend"><span><i style="background:var(--acc)"></i>Best lap</span><span><i style="background:var(--acc2)"></i>Last lap</span></div>{svg}
 <h2>Turn by turn</h2><div class="wrap"><table><tr><th>Corner</th><th>Avg loss vs your best</th><th>Variation</th><th>Best min speed (km/h)</th><th>Lock-ups</th><th>Wheelspin</th><th>Most common issue</th></tr>{trows}</table></div>
 <h2>Laps</h2><div class="wrap"><table><tr><th>Lap</th><th>Time</th><th>Gap to best</th></tr>{lrows}</table></div>
-<h2>Progress</h2><div class="wrap"><table><tr><th>Session</th><th>Best</th><th>Laps</th></tr>{prog}</table></div>
+<h2>Progress</h2><div class="wrap"><table><tr><th>Session</th><th>Best</th><th>Laps</th><th>Pace vs target</th><th>Consistency</th></tr>{prog}</table></div>
 </main></body></html>"""
     if existing_path and os.path.dirname(existing_path) == REPORT_DIR:
         path = existing_path
@@ -10238,6 +10488,8 @@ class Conversation:
     _RE_LAST_LAP_ONLY = re.compile(r"(?<!not )(?<!not my )\blast lap\b")
     _RE_REPORT = re.compile(r"\b(write (the |a )?report|session report|debrief me|open (the )?report)\b")
     _RE_THEO = re.compile(r"\b(theoretical|optimal|ultimate) (best|lap)\b")
+    _RE_TARGET = re.compile(r"\b(target( lap| time)?|off the pace|how far off|pace percent(age)?|benchmark)\b")
+    _RE_CONSISTENCY = re.compile(r"\b(consisten\w*|how (steady|repeatable))\b")
     _RE_PACE = re.compile(r"\b(what('s| is) my pace|how('s| is) (my|the) pace|my average( lap)?|average lap( time)?)\b")
     _RE_FUEL_NEED = re.compile(r"\b(how much fuel (do (i|we) need|to add|should (i|we) add|to (the )?(end|finish|flag))|"
                                r"fuel (to add|to (the )?(end|finish|flag)|needed))\b")
@@ -10353,6 +10605,27 @@ class Conversation:
         if self._RE_THEO.search(t):
             tb = c.theoretical_best()
             return f"Putting your best corners together gives {fmt_time(tb)}." if tb else "Need a few laps first."
+        if self._RE_TARGET.search(t):
+            tg = c.target()
+            if not tg:
+                return "I don't have a target time for this car and track."
+            best = self._clean_best()
+            line = f"The target is {fmt_time(tg[0])}, {c.target_words()}."
+            if best is None:
+                return line + " No clean laps of yours yet."
+            pace = c.pace_pct(best)
+            gap = best - tg[0]
+            return line + (f" Your best is {fmt_time(best)}, {tenths(gap)} off, {pace:.1f} percent." if gap > 0.05 else
+                           f" Your best is {fmt_time(best)}: you're on it.")
+        if self._RE_CONSISTENCY.search(t):
+            cons = consistency_of([x["time"] for x in hist if not x.get("pit") and not x.get("invalid")])
+            if not cons:
+                return "I need three clean laps to judge your consistency."
+            best = self._clean_best()
+            advice = pace_advice(c.pace_pct(best) if best else None, cons)
+            return (f"You're {cons['label']}: your clean laps vary by about {tenths(cons['sd'])}"
+                    + (f", not counting {cons['off']} slow lap{'s' if cons['off'] != 1 else ''}" if cons["off"] else "")
+                    + "." + (f" {advice}" if advice else ""))
         if self._RE_PACE.search(t):
             clean = [x["time"] for x in hist if not x.get("pit") and not x.get("invalid")][-5:]
             if not clean:
@@ -11390,6 +11663,50 @@ def library_submission_problem(d, name, current=None):
     return None
 
 
+def share_laps(best_dir, names, token, log=print):
+    """Upload these Best laps files to the library. Returns ({name: {"sha", "status", "url", "time", "when"}},
+    [(name, error text, http status)]). Stops at the first sign-in failure."""
+    results, errors = {}, []
+    for name in names:
+        try:
+            with open(os.path.join(best_dir, name), "rb") as fh:
+                data = fh.read()
+            d = json.loads(data.decode("utf-8"))
+            k = d["key"]
+            title = f"Best lap: {k[0]} · {k[1]} · {k[2]} · {fmt_time(d.get('best_time') or 0)}"
+            kind, url = upload_library_lap(token, name, data, title, log=log)
+            results[name] = {"sha": git_blob_sha(data), "status": kind, "url": url, "time": d.get("best_time"),
+                             "when": time.strftime("%Y-%m-%d %H:%M")}
+        except GitHubError as e:
+            errors.append((name, str(e), e.status))
+            if e.status == 401:
+                break
+        except Exception as e:
+            errors.append((name, f"{type(e).__name__}: {e}", 0))
+    return results, errors
+
+
+def laps_to_auto_share(best_dir, ref_dir, shared):
+    """Best laps that haven't been sent to the library in their current form: new laps and laps improved since
+    they were last sent. A lap the library already turned down isn't sent again until it gets faster."""
+    out = []
+    try:
+        names = sorted(f for f in os.listdir(best_dir) if f.endswith(".json"))
+    except OSError:
+        return out
+    for name in names:
+        if not os.path.exists(os.path.join(ref_dir, name)):
+            continue
+        try:
+            with open(os.path.join(best_dir, name), "rb") as fh:
+                sha = git_blob_sha(fh.read())
+        except OSError:
+            continue
+        if (shared.get(name) or {}).get("sha") != sha:
+            out.append(name)
+    return out
+
+
 class GitHubError(Exception):
     def __init__(self, msg, status=0):
         super().__init__(msg)
@@ -11768,39 +12085,121 @@ class App:
             r.after(400, self._ask_name)
 
     def _ask_name(self):
-        """First launch: ask what the crew should call the driver (asked once; it can be changed in Settings)."""
+        """First launch (or Settings > Quick setup): three short steps so the coach can be heard and talked to:
+        the driver's name, where the voice plays (with a test call), and the push-to-talk wheel button."""
+        if getattr(self, "_setup_win", None) is not None:
+            try:
+                self._setup_win.lift()
+                return
+            except Exception:
+                self._setup_win = None
         tk, ttk = self.tk, self.ttk
-        w = tk.Toplevel(self.root)
+        w = self._setup_win = tk.Toplevel(self.root)
         w.title("Welcome to SimCoach")
         w.configure(bg=C["panel"])
         w.resizable(False, False)
         w.transient(self.root)
         f = ttk.Frame(w, style="Card.TFrame", padding=18)
         f.pack(fill="both", expand=True)
-        ttk.Label(f, text="What should your crew call you?", style="Card.TLabel", font=self._font(12, True)).pack(anchor="w")
-        ttk.Label(f, text="Your coach, engineer and spotter use it on the radio. You can change it in Settings.",
-                  style="Mut.TLabel", wraplength=360).pack(anchor="w", pady=(4, 10))
-        name = tk.StringVar()
-        ent = ttk.Entry(f, textvariable=name, width=32)
-        ent.pack(anchor="w", fill="x")
+        step_lbl = ttk.Label(f, text="", style="Mut.TLabel")
+        step_lbl.pack(anchor="w")
+        title = ttk.Label(f, text="", style="Card.TLabel", font=self._font(12, True))
+        title.pack(anchor="w", pady=(2, 0))
+        note = ttk.Label(f, text="", style="Mut.TLabel", wraplength=400, justify="left")
+        note.pack(anchor="w", pady=(4, 10))
+        body = ttk.Frame(f, style="Card.TFrame")
+        body.pack(fill="x")
         b = ttk.Frame(f, style="Card.TFrame")
-        b.pack(fill="x", pady=(12, 0))
+        b.pack(fill="x", pady=(14, 0))
+        next_btn = ttk.Button(b, text="Next", style="Accent.TButton")
+        next_btn.pack(side="right")
+        skip_btn = ttk.Button(b, text="Skip setup")
+        skip_btn.pack(side="right", padx=8)
+        name = tk.StringVar(value=self.cfg.get("driver_name") or "")
+        state = {"step": 0, "poll": None}
 
-        def done(keep):
-            n = name.get().strip()[:40] if keep else ""
+        def close():
+            if state["poll"]:
+                try:
+                    w.after_cancel(state["poll"])
+                except Exception:
+                    pass
             self.cfg["name_asked"] = True
-            if n:
+            save_config(self.cfg)
+            self._setup_win = None
+            w.destroy()
+
+        def save_name():
+            n = name.get().strip()[:40]
+            self.cfg["name_asked"] = True
+            if n and n != self.cfg.get("driver_name"):
                 self.cfg["driver_name"] = n
                 if "driver_name" in getattr(self, "vars", {}):
                     self.vars["driver_name"].set(n)
                 self.log(f"Driver name set to {n}.")
             save_config(self.cfg)
-            w.destroy()
-        ttk.Button(b, text="Save", style="Accent.TButton", command=lambda: done(True)).pack(side="right")
-        ttk.Button(b, text="Skip", command=lambda: done(False)).pack(side="right", padx=8)
-        ent.bind("<Return>", lambda _e: done(True))
-        w.protocol("WM_DELETE_WINDOW", lambda: done(False))
+
+        def show(step):
+            state["step"] = step
+            for c in body.winfo_children():
+                c.destroy()
+            step_lbl.configure(text=f"Step {step + 1} of 3")
+            w.unbind("<Return>")
+            if step == 0:
+                title.configure(text="What should your crew call you?")
+                note.configure(text="Your coach, engineer and spotter use it on the radio. You can change it in Settings.")
+                ent = ttk.Entry(body, textvariable=name, width=32)
+                ent.pack(anchor="w", fill="x")
+                ent.bind("<Return>", lambda _e: go_next())
+                ent.focus_set()
+                next_btn.configure(text="Next")
+            elif step == 1:
+                title.configure(text="Where should you hear the coach?")
+                note.configure(text="Pick your headset or speakers (a VR headset shows up here too), then play a test "
+                                    "call. Nothing heard? Pick another and try again.")
+                var = self.vars["audio_out"]
+                ttk.Combobox(body, textvariable=var, values=list(self.out_combo.cget("values")) or [var.get()],
+                             state="readonly", width=40).pack(anchor="w")
+                ttk.Button(body, text="Play test call", command=self.test_voice).pack(anchor="w", pady=(10, 0))
+                next_btn.configure(text="Next")
+            else:
+                title.configure(text="Talk to your crew")
+                note.configure(text="Hold a button on your wheel to talk, like a real radio: ask for the gap, your fuel, "
+                                    "a setup change, or say \u201cwork on turn 3\u201d. Click Set, then press the button "
+                                    "you want. No wheel? Hold F8, or the Hold to talk button on the Live tab.")
+                row = ttk.Frame(body, style="Card.TFrame")
+                row.pack(anchor="w")
+                ttk.Button(row, text="Set wheel button", command=lambda: self.bind_action("ptt")).pack(side="left")
+                ptt = ttk.Label(row, text="", style="Card.TLabel")
+                ptt.pack(side="left", padx=10)
+
+                def poll():
+                    try:
+                        ptt.configure(text=self.bind_lbls["ptt"].cget("text"))
+                        state["poll"] = w.after(300, poll)
+                    except Exception:
+                        state["poll"] = None
+                poll()
+                ttk.Label(body, text="You're set. Press Start coaching, then go on track in any supported sim.",
+                          style="Card.TLabel", wraplength=400, justify="left").pack(anchor="w", pady=(12, 0))
+                next_btn.configure(text="Finish")
+                skip_btn.pack_forget()
+
+        def go_next():
+            step = state["step"]
+            if step == 0:
+                save_name()
+            elif step == 1:
+                self.save_settings(quiet=True)
+            if step >= 2:
+                close()
+            else:
+                show(step + 1)
+        next_btn.configure(command=go_next)
+        skip_btn.configure(command=close)
+        w.protocol("WM_DELETE_WINDOW", close)
         _win_dark_titlebar(w)
+        show(0)
         w.update_idletasks()
         try:
             x = self.root.winfo_rootx() + (self.root.winfo_width() - w.winfo_reqwidth()) // 2
@@ -11808,7 +12207,6 @@ class App:
             w.geometry(f"+{max(0, x)}+{max(0, y)}")
         except Exception:
             pass
-        ent.focus_set()
 
     def _set_icon(self):
         try:
@@ -12053,7 +12451,8 @@ class App:
         self.delta_lbl.pack(anchor="w")
         kcard = self._card(row, side="left", fill="both", expand=True)
         self.kpi = {}
-        for k, label in (("last", "Last lap"), ("best", "Best lap"), ("theo", "Theoretical best"), ("laps", "Laps")):
+        for k, label in (("last", "Last lap"), ("best", "Best lap"), ("theo", "Theoretical best"), ("laps", "Laps"),
+                         ("pace", "Pace vs target"), ("cons", "Consistency")):
             f = ttk.Frame(kcard, style="Card.TFrame")
             f.pack(fill="x", pady=3)
             ttk.Label(f, text=label, style="Mut.TLabel", width=18).pack(side="left")
@@ -12457,6 +12856,7 @@ class App:
         self.saved_lbl.pack(side="left", padx=12)
         ttk.Button(foot, text="Open log file", command=lambda: self._open(LOG_PATH)).pack(side="right")
         ttk.Button(foot, text="Create desktop shortcut", command=self.make_shortcut).pack(side="right", padx=8)
+        ttk.Button(foot, text="Quick setup", command=self._ask_name).pack(side="right")
         self.root.after(300, self.refresh_devices)
 
     def _references(self):
@@ -12586,6 +12986,9 @@ class App:
         ttk.Button(bar, text="View on GitHub", command=self.view_best).pack(side="left", padx=8)
         self.gh_btn = ttk.Button(bar, text="", command=self.github_account)
         self.gh_btn.pack(side="right")
+        self.auto_share_var = self.tk.BooleanVar(value=bool(self.cfg.get("auto_share")))
+        ttk.Checkbutton(bar, text="Share new best laps automatically", variable=self.auto_share_var,
+                        command=self.toggle_auto_share).pack(side="left", padx=(8, 0))
         self.best_lbl = ttk.Label(t, text="", style="BgMut.TLabel", wraplength=1150, justify="left")
         self.best_lbl.pack(anchor="w", pady=(2, 0))
         ttk.Label(t, text=f"Your best lap for every sim, track and car, saved ready to share in {BEST_DIR}. "
@@ -12603,8 +13006,61 @@ class App:
         self.root.after(20000, self._best_tick)
 
     def _best_tick(self):
-        threading.Thread(target=lambda: save_best_laps(REF_DIR, BEST_DIR), daemon=True, name="best-laps").start()
+        def work():
+            save_best_laps(REF_DIR, BEST_DIR)
+            self.auto_share_best(in_thread=True)
+        threading.Thread(target=work, daemon=True, name="best-laps").start()
         self.root.after(10 * 60 * 1000, self._best_tick)
+
+    def auto_share_best(self, in_thread=False):
+        """Settings > 'Share new best laps automatically': send new and improved best laps to the library without
+        asking each time. Only when signed in to GitHub; the same checks as sharing by hand."""
+        if not (self.cfg.get("auto_share") and self.cfg.get("github_token") and self._gh_client_id()) \
+                or getattr(self, "_sharing", False):
+            return
+        token = self.cfg["github_token"]
+
+        def work():
+            names = laps_to_auto_share(BEST_DIR, REF_DIR, self.cfg.get("shared_laps") or {})
+            if not names:
+                return
+            self._sharing = True
+            self.log(f"Sharing {len(names)} new best lap{'s' if len(names) != 1 else ''} to the library automatically.")
+            results, errors = share_laps(BEST_DIR, names, token, log=self.log)
+            # a lap that failed for a reason other than sign-in isn't retried every ten minutes
+            for name, msg, st in errors:
+                if st != 401 and name not in results:
+                    try:
+                        with open(os.path.join(BEST_DIR, name), "rb") as fh:
+                            results[name] = {"sha": git_blob_sha(fh.read()), "status": "refused", "url": msg,
+                                             "when": time.strftime("%Y-%m-%d %H:%M")}
+                    except OSError:
+                        pass
+            self.post(best_shared=(results, errors))
+        if in_thread:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True, name="auto-share").start()
+
+    def toggle_auto_share(self):
+        from tkinter import messagebox
+        on = bool(self.auto_share_var.get())
+        if on and not self._gh_client_id():
+            self.auto_share_var.set(False)
+            self.best_lbl.configure(text="Automatic sharing needs in-app GitHub sign-in, which this copy doesn't have.")
+            return
+        if on and not messagebox.askyesno(
+                "SimCoach", "Share every new best lap to the public SimCoach library automatically?\n\n"
+                            "Shared: sim, track, car and the lap trace. Your GitHub username shows on each submission. "
+                            "You can switch this off here at any time."):
+            self.auto_share_var.set(False)
+            return
+        self.cfg["auto_share"] = on
+        save_config(self.cfg)
+        if on and not self.cfg.get("github_token"):
+            self.github_sign_in(then=self.auto_share_best)
+        elif on:
+            self.auto_share_best()
 
     def _gh_client_id(self):
         return (self.cfg.get("github_client_id") or GITHUB_CLIENT_ID or "").strip()
@@ -12823,25 +13279,7 @@ class App:
         token = self.cfg["github_token"]
 
         def work():
-            results, errors = {}, []
-            for name in names:
-                try:
-                    with open(os.path.join(BEST_DIR, name), "rb") as fh:
-                        data = fh.read()
-                    d = json.loads(data.decode("utf-8"))
-                    k = d["key"]
-                    title = f"Best lap: {k[0]} · {k[1]} · {k[2]} · {fmt_time(d.get('best_time') or 0)}"
-                    kind, url = upload_library_lap(token, name, data, title, log=self.log)
-                    results[name] = {"sha": git_blob_sha(data), "status": kind, "url": url,
-                                     "time": d.get("best_time"),
-                                     "when": time.strftime("%Y-%m-%d %H:%M")}
-                except GitHubError as e:
-                    errors.append((name, str(e), e.status))
-                    if e.status == 401:
-                        break
-                except Exception as e:
-                    errors.append((name, f"{type(e).__name__}: {e}", 0))
-            self.post(best_shared=(results, errors))
+            self.post(best_shared=share_laps(BEST_DIR, names, token, log=self.log))
         threading.Thread(target=work, daemon=True, name="share-laps").start()
 
     def _best_shared(self, ev):
@@ -14210,6 +14648,13 @@ class App:
             self.kpi["best"].configure(text=fmt_time(best).replace(" ", ":") if best else "—")
             self.kpi["theo"].configure(text=fmt_time(tb).replace(" ", ":") if tb else "—")
             self.kpi["laps"].configure(text=str(len(alltimes)))
+            tg = c.target()
+            pace = c.pace_pct(best) if (best and tg) else None
+            self.kpi["pace"].configure(
+                text=(f"{pace:.1f}%  ·  target {fmt_time(tg[0]).replace(' ', ':')}" if pace is not None else
+                      f"target {fmt_time(tg[0]).replace(' ', ':')}" if tg else "—"))
+            cons = consistency_of([t_ for t_, inv, pit in hist_snap if not inv and not pit])
+            self.kpi["cons"].configure(text=f"±{cons['sd']:.2f}s  ·  {cons['label']}" if cons else "—")
             if s is None:
                 return
             tv = self.laps_tv

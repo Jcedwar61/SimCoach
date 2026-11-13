@@ -48,7 +48,8 @@ One-time game settings
       once to load it.)
     * Spotter & gaps: uses the CrewChiefEx Python app (Content Manager > Settings > Assetto Corsa > Python
       apps; SimCoach enables it for you).
-  - ACC, AC Rally, LMU, RaceRoom: nothing needed.
+  - ACC, AC Rally, LMU, RaceRoom: nothing needed. (RaceRoom cars are named from SimCoach's built-in list of
+    360 cars; a car added to RaceRoom after this version shows as "car <number>" until SimCoach is updated.)
   - Running SimHub and SimCoach together: no setup needed. SimCoach shares UDP port 20777 with SimHub when
     SimHub listens on all addresses, steps aside if SimHub launches later, and also listens on fallback
     ports 20778 (F1) and 20779 (DiRT Rally 2.0). Untick "Share ... telemetry with SimHub" in Settings to
@@ -153,6 +154,8 @@ On track: live coaching & voice commands
       "how are my tyres", "damage check", "engine temps", "cars around me", "who's ahead", "who's behind"
     * Setup: "suggest a setup", "apply the setup", "show the setup sheet", "close the setup sheet"
     * Briefing: "full briefing", "skip the briefing"
+    * Target and consistency: "what's the target time" (a quick lap for your sim and class, and how far off
+      you are), "how consistent am I" (how much your clean laps vary, and what to work on first).
     * Practice drills: "work on turn 3 for five laps" (or "practise turn 7"; default 5 laps). The coach talks
       only about that corner, scores it every lap against your best there, sums up before vs during at the
       end and adds a table to the report. "Stop the drill" ends it early. Practice and qualifying only.
@@ -195,8 +198,16 @@ In-game overlay (Overlay button, top right)
 
 Tabs & settings
 ---------------
-  - Live: live delta, lap KPIs, latest coach call, current focus corners, Hold to talk, Test voice, Setup
-    sheet button, and Quiet mode toggle.
+  - Live: live delta, lap KPIs (last, best and theoretical best lap, your pace against the target as a
+    percentage of a quick lap for your sim and class, and your consistency: how much clean laps vary),
+    latest coach call, current focus corners, Hold to talk, Test voice, Setup sheet button, and Quiet mode
+    toggle.
+  - Quick setup: on first launch SimCoach asks three things: your name, where the coach's voice should
+    play (with a test call), and which wheel button you hold to talk. Run it again any time from
+    Settings > Quick setup.
+  - Best laps: your best lap per sim / track / car, ready to share. Tick "Share new best laps
+    automatically" to send new and improved laps to the library without being asked each time (off by
+    default; needs GitHub sign-in).
   - Radio check: test push-to-talk, microphone level meter, speech recognition, coach reply, voice output,
     and total round-trip time before launching a sim, or send a typed question.
   - Laps & corners: live session lap table and turn-by-turn loss, minimum speed, and issue breakdown.

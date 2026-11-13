@@ -68,6 +68,31 @@ def run():
             pump()
             check(cfg["driver_name"] == "Sam" and app.vars["driver_name"].get() == "Sam" and saved.get("name_asked"),
                   "welcome box saves the name")
+            # quick setup, step 2: where the voice plays, with a test call
+            said_test = []
+            real_say = app.voice.say
+            app.voice.say = lambda text, *a, **k: said_test.append(text)
+            kinds = [c.winfo_class() for c in walk(tops[0])]
+            labels = " | ".join(str(c.cget("text")) for c in walk(tops[0]) if c.winfo_class() == "TLabel")
+            check("Step 2 of 3" in labels and "TCombobox" in kinds, "step 2: pick where the coach is heard")
+            btns = {c.cget("text"): c for c in walk(tops[0]) if c.winfo_class() == "TButton"}
+            btns["Play test call"].invoke()
+            pump(0.2)
+            check(any("Radio check, Sam" in t for t in said_test), "the test call plays")
+            app.voice.say = real_say
+            btns["Next"].invoke()
+            pump(0.2)
+            labels = " | ".join(str(c.cget("text")) for c in walk(tops[0]) if c.winfo_class() == "TLabel")
+            btns = {c.cget("text"): c for c in walk(tops[0]) if c.winfo_class() == "TButton"}
+            check("Step 3 of 3" in labels and "Set wheel button" in btns and "F8" in labels, "step 3: push-to-talk, with the no-wheel fallback")
+            btns["Set wheel button"].invoke()
+            pump(0.5)
+            labels = " | ".join(str(c.cget("text")) for c in walk(tops[0]) if c.winfo_class() == "TLabel")
+            check("No wheel found" in labels or "Press the wheel button" in labels, "the wheel button status shows in the box")
+            btns["Finish"].invoke()
+            pump(0.2)
+            check(app._setup_win is None and not [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"
+                                                  and w.title() == "Welcome to SimCoach"], "Finish closes it")
         # settings: provider switching and saving
         check(app.vars["ai_provider"].get() == "Google Gemini" and app.model_combo.get() == "gemini-3.5-flash", "Gemini shown")
         check(app.vars["coach_personality"].get().startswith("Exit"), "old personality key shows its new name")
@@ -159,6 +184,22 @@ def run():
         ls = rows.get("Laguna Seca")
         check(ls and ls[2] == "Target times only" and ls[3] == "—" and "ACC GT3 1:21.3" in ls[7], "tracks with target times only are listed too")
         check("circuits where coaching starts on lap one" in app.starter_lbl.cget("text"), "with an explanation above it")
+        # Live tab: pace against the target and consistency
+        check("pace" in app.kpi and "cons" in app.kpi and app.kpi["pace"].cget("text") == "—", "Live tab has pace and consistency rows")
+        # automatic sharing: off by default, asks once, needs sign-in
+        import tkinter.messagebox as mb0
+        asked = []
+        mb0.askyesno = lambda *a, **k: (asked.append(a), True)[1]
+        check(not cfg.get("auto_share") and not app.auto_share_var.get(), "automatic sharing is off by default")
+        signins = []
+        app.github_sign_in = lambda then=None: signins.append(then)
+        app.auto_share_var.set(True)
+        app.toggle_auto_share()
+        check(asked and cfg["auto_share"] is True and saved.get("auto_share") is True and len(signins) == 1,
+              "switching it on asks first, saves, and starts sign-in when not signed in")
+        app.auto_share_var.set(False)
+        app.toggle_auto_share()
+        check(cfg["auto_share"] is False, "and it switches off again")
         # Best laps tab: saved ready to share, the web-page route without in-app sign-in, then in-app sharing
         app.nb.select(app.tab_best)
         pump(0.5)
@@ -184,6 +225,16 @@ def run():
         app._lib_index = {LAPNAME: sc.git_blob_sha(open(os.path.join(sc.BEST_DIR, LAPNAME), "rb").read())}
         app.load_best()
         check(app.best_tv.set(LAPNAME, "status") == "In the library ✓", "added: in the library")
+        cfg["auto_share"], cfg["shared_laps"] = True, {}
+        sent = []
+        sc.upload_library_lap = lambda token, name, data, title, **k: (sent.append(name), ("added", "https://example.invalid/blob"))[1]
+        app.auto_share_best()
+        wait_for(lambda: LAPNAME in (cfg.get("shared_laps") or {}), 5)
+        check(sent == [LAPNAME] and cfg["shared_laps"][LAPNAME]["status"] == "added", "automatic sharing sends the new best lap")
+        app.auto_share_best()
+        pump(0.5)
+        check(sent == [LAPNAME], "and doesn't send the same lap twice")
+        cfg["auto_share"] = False
         # Phone screen button: the dialog shows the address and a QR code, and can switch it off and on
         app.phone_screen_dialog()
         pump(0.3)

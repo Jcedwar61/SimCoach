@@ -14,6 +14,15 @@ Changes made by SimCoach: each race line's curvature is resampled to 2000 points
 compressed differences. The tool that does this, `tools/references/make_starter_laps.py`, rebuilds the embedded
 block from the original files, so the data can be inspected, modified and replaced.
 
+## RaceRoom car names
+
+The RaceRoom car list (`RACEROOM_CARS_B64` in `sim_coach.py`: model id, car name, class name) is taken from
+`r3e-data.json` in **sector3studios/r3e-spectator-overlay** — https://github.com/sector3studios/r3e-spectator-overlay —
+by Sector3 Studios / KW Studios, the makers of RaceRoom Racing Experience. Only the ids and names are used.
+`tools/references/make_raceroom_cars.py` rebuilds the list from that file.
+
+## Starter-lap tracks in the library
+
 The starter-lap tracks in the library (`references/tracks/*.json`, downloaded by the app) are derived from
 **bacinger/f1-circuits** — https://github.com/bacinger/f1-circuits — Copyright (c) 2019-2025 Tomislav Bacinger,
 **MIT License**:

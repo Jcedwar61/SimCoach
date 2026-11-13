@@ -29,6 +29,8 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_reference_library | shared library downloads (local stand-in for GitHub) and the coach flow |
 | test_library_review | GitHub-side checker that adds shared laps (faster / slower / broken / mismatched / non-lap PRs) |
 | test_share_laps | Best laps folder, library fingerprint, GitHub code sign-in, owner commit vs fork + pull request (local stand-in) |
+| test_pace_consistency | pace against the target, consistency score, advice, voice commands, session history, report |
+| test_raceroom | RaceRoom car names and classes, target times there, moving references saved under "car <id>" |
 | test_benchmarks | benchmark lap times by sim / class / car: selection, starter-lap tuning, target announcements, library file |
 | test_library_tracks | starter-lap track shapes from the library: checks, download, use, removal |
 | test_library_sync | automatic library import: new / changed / unchanged / bad files, own laps kept, live adoption |
@@ -57,6 +59,8 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 
 ## Reference data
 
+- `references/make_raceroom_cars.py R3E_DATA.json` rebuilds the RaceRoom car list built into sim_coach.py
+  (run it when RaceRoom adds cars)
 - `references/make_benchmarks.py` writes the benchmark lap times (`references/benchmarks/laps.json` and the copy
   built into sim_coach.py); add new times to its table and run it
 - `references/make_library_tracks.py F1_CIRCUITS.geojson` builds the library's starter-lap track files
