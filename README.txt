@@ -121,8 +121,9 @@ On track: live coaching & voice commands
     Benchmarks: the library holds quick lap times by sim and car class (ACC, iRacing, LMU, AMS2, rFactor 2,
     AC, F1). The coach tells you the target for your sim and class (or exact car) at the start of a session,
     also at tracks without a starter lap, and starter laps are tuned to match it.
-    More circuits arrive automatically from the library's tracks folder (19 so far, e.g. Imola, Mugello,
-    Monaco, Paul Ricard, Portimao, Kyalami, Watkins Glen; track shapes from bacinger/f1-circuits, MIT).
+    More circuits arrive automatically from the library's tracks folder (31 so far, e.g. Imola, Mugello,
+    Monaco, Paul Ricard, Laguna Seca, Road America, Road Atlanta, Donington, Misano, Fuji; track shapes from
+    bacinger/f1-circuits, MIT, and OpenStreetMap, (c) OpenStreetMap contributors, ODbL).
     No live delta or "time lost" against it; your first lap replaces it, and it's never saved. Settings:
     "Starter laps". Track shapes: TUMFTM racetrack-database (LGPL-3.0), from OpenStreetMap data
     (c) OpenStreetMap contributors. See THIRD_PARTY_NOTICES.md and github.com/TUMFTM/racetrack-database.

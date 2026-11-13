@@ -23,6 +23,14 @@ by Sector3 Studios / KW Studios, the makers of RaceRoom Racing Experience. Only 
 
 ## Starter-lap tracks in the library
 
+Twelve starter-lap tracks in the library (`references/tracks/`: Donington, Fuji, IndianapolisGP, IndianapolisRoad,
+Jerez, LagunaSeca, Misano, RoadAmerica, RoadAtlanta, TheBend, Valencia, Zolder) are derived from **OpenStreetMap**
+data, © OpenStreetMap contributors, available under the **Open Database License (ODbL 1.0)**
+(https://www.openstreetmap.org/copyright, https://opendatacommons.org/licenses/odbl/1-0/). Those files are a
+derived database and are themselves available under the ODbL. Changes: each circuit's raceway outline was taken in
+race direction, smoothed, a racing line fitted inside a 10 m corridor, and its curvature stored at 2000 points per
+lap (`tools/references/make_osm_tracks.py`).
+
 The starter-lap tracks in the library (`references/tracks/*.json`, downloaded by the app) are derived from
 **bacinger/f1-circuits** — https://github.com/bacinger/f1-circuits — Copyright (c) 2019-2025 Tomislav Bacinger,
 **MIT License**:

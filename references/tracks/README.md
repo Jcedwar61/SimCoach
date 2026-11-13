@@ -13,5 +13,8 @@ lap length must also be within 3 %), `length` in metres, and `steps` (the racing
 around the lap, as differences in 1e-5 / m).
 
 Built with `tools/references/make_library_tracks.py` from
-[bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) (MIT). Checked by
-`tools/references/check_library.py`.
+[bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) (MIT), and with
+`tools/references/make_osm_tracks.py` from OpenStreetMap raceway outlines (© OpenStreetMap contributors, ODbL:
+Donington, Fuji, Indianapolis GP and road course, Jerez, Laguna Seca, Misano, Road America, Road Atlanta, The
+Bend, Valencia, Zolder). Every OpenStreetMap track was checked against real GT3 (or class) lap times: the
+calculated lap was within 4 % of them before tuning. Checked by `tools/references/check_library.py`.

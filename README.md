@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.10.1)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.11)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -13,7 +13,7 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 
 ### What it does
 * **Live voice coaching:** braking tones, focus-corner cues and exit diagnosis against your reference lap, with a short debrief each lap. Six coach styles (Apex, Rotation, Composed, Feel, Exit, Data).
-* **Coaching from lap one:** at 43 circuits SimCoach calculates a *starter lap* for your car's class and lines it up with your sim during the first lap, so braking calls start before you've set a time. Your first clean lap replaces it.
+* **Coaching from lap one:** at 55 circuits SimCoach calculates a *starter lap* for your car's class and lines it up with your sim during the first lap, so braking calls start before you've set a time. Your first clean lap replaces it.
 * **Target lap times:** the coach tells you what a quick lap is for your sim and class (or exact car) at 48 tracks, from 87 benchmark times across ACC, iRacing, LMU, AMS2, rFactor 2, AC and F1.
 * **Race crew:** engineer, strategist and spotter call fuel, virtual energy, temperatures, wear, track limits, weather, flags, gaps and cars alongside. Urgent calls cut in ahead of everything else.
 * **Race starts and drills:** a grid reminder and a start review after turn one; say *"work on turn 3 for five laps"* for a focused drill.
@@ -25,6 +25,11 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Reports:** an HTML report after each session.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.11
+* **Starter laps at 12 more circuits:** Laguna Seca, Road America, Road Atlanta, Donington, Misano, Zolder, Valencia, Jerez, Fuji, The Bend, and the Indianapolis GP and road course layouts, built from OpenStreetMap track outlines (© OpenStreetMap contributors, ODbL). Each was checked against real lap times: within 4 % before tuning. That's 55 circuits with coaching from lap one, delivered through the library.
+* **Crew banter matches your pace:** while you're well off a quick lap or your own best, the strategist encourages instead of saying "pace is solid".
+* **Report fuel:** the setup sheet in the report shows the fuel you actually used per lap, not the guess from the start of the session.
 
 ### What's new in 6.10.1
 * **Fairer consistency score:** laps more than 2 % off your best (early laps while you learn the track, or a lap spoiled by traffic) are now set aside, so getting quicker through a session no longer counts as being inconsistent. Found in a test session where steady laps after a learning lap were rated "inconsistent, 3.6 seconds".

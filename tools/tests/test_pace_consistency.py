@@ -80,4 +80,41 @@ check(coach.target() is None and coach.pace_pct(99.0) is None, "no benchmark: no
 check("percent of" not in " ".join(said), "and nothing said about it")
 ans = sc.Conversation(cfg, coach, voice, sc.NullOverlay(), log=lambda m: None).local("what's the target time") or ""
 check("don't have a target" in ans, "asked anyway: says there's none")
+
+# crew banter: no praise for the pace while the driver is well off it
+crew = sc.Crew(sc.load_config(), sc.Voice(sc.load_config(), enabled=False), sc.NullOverlay(), coach=None)
+picked = []
+crew.chatter = lambda role, event, facts, now, **k: picked.append((event, facts))
+crew.on = lambda r: True
+crew.voice.idle = lambda now: True
+crew.voice.on_straight.set()
+crew.spot = {"left": False, "right": False}
+crew.last_spoken = crew.last_chat = -1000.0
+f = sc.Frame("ACC", "spa", "Porsche 911 GT3 R (992)", 3, 0.3, 200.0, 1.0, 0.0, 0.0, 5, 7000.0, 40.0, 142.0, False, False)
+
+
+class _C:
+    def target(self):
+        return (136.4, False, "gt3")
+
+
+crew.coach = _C()
+crew.lap_times = [151.7, 146.9, 144.5]
+crew.banter(f, 1000.0)
+check(picked and picked[-1][0] == "quiet_slow" and picked[-1][1].get("pace_pct_of_quick_lap") == 105.9,
+      f"well off the target: encouraging, not 'pace is solid' ({picked[-1:]})")
+crew.lap_times = [137.6, 137.2, 137.4]
+crew.last_spoken = crew.last_chat = -1000.0
+crew.banter(f, 2000.0)
+check(picked[-1][0] == "quiet", "close to the target and their best: normal banter")
+check(all("pace" not in x.lower() or "speed follows" in x.lower() for x in sc.CANNED["quiet_slow"]["strategist"]),
+      "the strategist's lines for that moment don't praise the pace")
+
+# the report's setup sheet shows the fuel actually used once laps have measured it
+sheet = {"items": [("Fuel", "Fuel load", "40 litres"), ("Fuel", "Use per lap", "About 2.4 litres (a guess until SimCoach has timed a lap)"),
+                   ("Tyres", "Hot pressures", "27.0 to 27.4 psi")], "source": "Built-in advisor", "made": "now"}
+out = sc.sheet_with_measured_fuel(sheet, 2.93, "ACC")
+check(out["items"][1][2] == "2.9 litres (measured this session)" and out["items"][0] == sheet["items"][0],
+      "measured fuel replaces the guess")
+check(sc.sheet_with_measured_fuel(sheet, None, "ACC") is sheet, "no measurement yet: the sheet is unchanged")
 done()
