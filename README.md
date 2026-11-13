@@ -4,6 +4,12 @@
 * **[Download SimCoach-Setup.exe (Windows Installer, v6.10.1)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
+* ### Quick setup
+![The three quick-setup steps](https://raw.githubusercontent.com/Jcedwar61/SimCoach/main/docs/screenshots/6.10/quick-setup.png)
+
+### Pace and consistency in the report
+![Report with pace against the target and the consistency score](https://raw.githubusercontent.com/Jcedwar61/SimCoach/main/docs/screenshots/6.10/report.png)
+
 
 ### Install
 Run `SimCoach-Setup.exe`. No admin rights needed; it installs Python 3.12, SimCoach's packages and free offline speech recognition. If Windows SmartScreen appears: *More info → Run anyway*. SimCoach tells you when a newer release is out and can install it for you.
