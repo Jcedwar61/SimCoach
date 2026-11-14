@@ -42,8 +42,7 @@ LOOP_HZ = 30
 DEFAULTS = {
     "lead_name": "Ben", "analyst_name": "Kate", "pit_name": "Mia",
     "lead_voice": "en-GB-RyanNeural", "analyst_voice": "en-GB-SoniaNeural", "pit_voice": "en-AU-NatashaNeural",
-    "openai_lead_voice": "ash", "openai_analyst_voice": "coral", "openai_pit_voice": "sage",
-    "tts": "edge", "speech_rate": 0,
+    "tts": "on", "speech_rate": 0,
     "volume": 0.9, "audio_out": "",
     "chatter": "normal", "focus": "balanced", "pit_reporter": True, "ai_colour": True,
     "driver_name": "", "ai_provider": "openai", "ai_fallback": True,
@@ -52,7 +51,7 @@ DEFAULTS = {
     "f1_port": 20777, "dr2_port": 20779, "udp_share_simhub": True, "game_setup": True, "guide_seen": False,
     "demo_laps": 8, "captions": False, "captions_pos": None, "window": None,
 }
-CHOICES = {"tts": ("edge", "kokoro", "google", "openai", "off"), "chatter": ("quiet", "normal", "chatty"),
+CHOICES = {"tts": ("on", "off"), "chatter": ("quiet", "normal", "chatty"),
            "focus": ("field", "balanced", "me"), "ai_provider": ("openai", "gemini", "deepseek")}
 SECRET_KEYS = ("openai_api_key", "gemini_api_key", "deepseek_api_key")
 ROLE_LABEL = {"lead": "lead", "analyst": "analyst", "pit": "pit lane"}
@@ -74,6 +73,8 @@ def load_config(path=None):
 
 
 def clean_config(cfg):
+    if cfg.get("tts") in ("edge", "kokoro", "google", "openai"):      # settings from SimCast 1.0
+        cfg["tts"] = "on"
     for k, opts in CHOICES.items():
         if cfg.get(k) not in opts:
             cfg[k] = DEFAULTS[k]

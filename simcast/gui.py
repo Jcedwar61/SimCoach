@@ -9,22 +9,23 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from .app import APP_NAME, APP_VERSION, DEFAULTS
-from .audio import EDGE_VOICES, OPENAI_VOICES
+from . import providers
+from .app import APP_DIR, APP_NAME, APP_VERSION, DEFAULTS
+from .audio import VOICE_LABEL, VOICES
+from .guide import TOPICS as GUIDE
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
 ICO = os.path.join(os.path.dirname(HERE), "SimCast.ico")
+LICENSE_DIR = os.path.join(HERE, "licenses")
 
 P = {"bg": "#090b10", "panel": "#11151d", "panel2": "#171c26", "line": "#252d3b", "fg": "#e9eef5",
      "mut": "#8b97a9", "cyan": "#2ee0f5", "red": "#ff3347", "red_dk": "#c81d30", "amber": "#ff8c2b",
      "purple": "#b46cff", "green": "#3ddc84", "hover": "#1f2633", "me": "#0f3440", "e3": "#2a1219"}
 WHO_COLOUR = {"lead": P["cyan"], "analyst": P["red"], "pit": "#f2f2f2"}
-TTS_LABELS = {"edge": "Microsoft neural voices (free)", "openai": "OpenAI voices (most lifelike, uses your key)",
-              "off": "Off (text only)"}
 CHATTER_LABELS = {"quiet": "Quiet", "normal": "Normal", "chatty": "Chatty"}
 FOCUS_LABELS = {"field": "Whole field", "balanced": "Balanced", "me": "Mostly me"}
-PROVIDER_LABELS = {"": "Same as SimCoach", "openai": "OpenAI", "gemini": "Google Gemini", "deepseek": "DeepSeek"}
+PROVIDERS = {"openai": "OpenAI", "gemini": "Google Gemini", "deepseek": "DeepSeek"}
 
 
 def _dpi_aware():
@@ -109,6 +110,9 @@ class SimCastWindow:
             cast.start_demo()
         if cast.cfg.get("captions"):
             self.toggle_captions(True)
+        if not cast.cfg.get("guide_seen"):                 # first start: open the guide on Getting started
+            r.after(600, self.open_guide)
+            cast.update_settings({"guide_seen": True})
 
     # ------------------------------------------------------------------ look
     def _fonts(self):
@@ -168,7 +172,9 @@ class SimCastWindow:
                    indicatorforeground=[("selected", "#ffffff")], background=[("active", P["panel"])])
         st.configure("Bar.TCheckbutton", background=P["bg"])
         st.map("Bar.TCheckbutton", background=[("active", P["bg"])])
-        st.configure("Horizontal.TScale", background=P["panel"], troughcolor=P["panel2"])
+        st.configure("Horizontal.TScale", background=P["red_dk"], troughcolor=P["panel2"], bordercolor=P["line"],
+                     lightcolor=P["red"], darkcolor=P["red_dk"], sliderlength=18)
+        st.map("Horizontal.TScale", background=[("active", P["red"])])
         st.configure("Vertical.TScrollbar", background=P["panel2"], troughcolor=P["panel"], arrowcolor=P["mut"],
                      bordercolor=P["panel"], lightcolor=P["panel2"], darkcolor=P["panel2"], gripcount=0,
                      arrowsize=12)
@@ -225,6 +231,7 @@ class SimCastWindow:
         ttk.Button(btns, text="Skip", command=self.skip).pack(side="left", padx=4)
         self.air_btn = ttk.Button(btns, text="●  On air", style="OnAir.TButton", command=self.toggle_air)
         self.air_btn.pack(side="left", padx=4)
+        ttk.Button(btns, text="?  Guide", command=self.open_guide).pack(side="left", padx=4)
         ttk.Button(btns, text="⚙  Settings", command=self.open_settings).pack(side="left", padx=(4, 0))
 
         self.body = ttk.Frame(r, padding=(16, 4, 16, 8))
@@ -447,6 +454,16 @@ class SimCastWindow:
         if bool(self.cast.cfg.get("captions")) != bool(on):
             self.cast.update_settings({"captions": bool(on)})
 
+    def open_guide(self, topic=None):
+        g = getattr(self, "guide_win", None)
+        if g is not None and g.win.winfo_exists():
+            g.win.lift()
+            if topic:
+                names = [t for t, _ in g.topics]
+                g.show(names.index(topic) if topic in names else 0)
+            return
+        self.guide_win = GuideWindow(self, topic)
+
     def open_settings(self):
         if self.settings_win is not None and self.settings_win.win.winfo_exists():
             self.settings_win.win.lift()
@@ -538,6 +555,8 @@ class Captions:
 
 
 class SettingsWindow:
+    """Settings, in five tabs: Commentary, Voices, AI, Sims, About."""
+
     def __init__(self, app):
         self.app = app
         cast = app.cast
@@ -548,138 +567,211 @@ class SettingsWindow:
         w.transient(app.root)
         w.resizable(False, False)
         dark_titlebar(w)
-        nb = ttk.Notebook(w)
+        self.nb = nb = ttk.Notebook(w)
         nb.pack(fill="both", expand=True)
         self.v = {}
+        self.f = app.f
 
         def page(title):
             f = ttk.Frame(nb, style="Card.TFrame", padding=18)
             f.columnconfigure(1, weight=1)
-            nb.add(f, text=title)
+            nb.add(f, text=f"  {title}  ")
             return f
 
-        def row(f, r, label, widget, extra=None, sticky="ew"):
-            ttk.Label(f, text=label, style="Card.TLabel", foreground=P["mut"]).grid(row=r, column=0, sticky="w",
-                                                                                   padx=(0, 14), pady=5)
-            widget.grid(row=r, column=1, sticky=sticky, pady=5)
-            if extra is not None:
-                extra.grid(row=r, column=2, sticky="w", padx=(8, 0), pady=5)
-
-        def radios(f, key, labels):
-            fr = ttk.Frame(f, style="Card.TFrame")
-            var = self.v[key] = tk.StringVar(value=cfg.get(key))
-            for k, lab in labels.items():
-                ttk.Radiobutton(fr, text=lab, value=k, variable=var).pack(side="left", padx=(0, 14))
-            return fr
-
-        def entry(f, key, show=None, width=30):
-            var = self.v[key] = tk.StringVar(value="" if show else str(cfg.get(key) or ""))
-            return ttk.Entry(f, textvariable=var, width=width, show=show or "")
-
-        def combo(f, key, values, labels=None):
-            labels = labels or {x: x for x in values}
-            var = tk.StringVar(value=labels.get(cfg.get(key), cfg.get(key) or ""))
-            self.v[key] = (var, {v: k for k, v in labels.items()})
-            return ttk.Combobox(f, textvariable=var, values=[labels[x] for x in values], state="readonly", width=40)
-
-        # commentary
-        f = page("  Commentary  ")
-        row(f, 0, "How chatty", radios(f, "chatter", CHATTER_LABELS))
-        row(f, 1, "Follow", radios(f, "focus", FOCUS_LABELS))
-        row(f, 2, "Your name", entry(f, "driver_name"))
-        ttk.Label(f, text="As the booth should say it. Empty: your name from SimCoach, or the one your sim uses.",
-                  style="Card.TLabel", foreground=P["mut"], font=app.f["small"]).grid(row=3, column=1, sticky="w")
-        self.v["pit_reporter"] = tk.BooleanVar(value=bool(cfg.get("pit_reporter", True)))
-        row(f, 4, "Pit lane", ttk.Checkbutton(f, text="A pit-lane reporter covers the stops",
-                                              variable=self.v["pit_reporter"]))
+        # ---------------------------------------------------------------- Commentary
+        f = page("Commentary")
+        self.row(f, 0, "How chatty", self.radios(f, "chatter", CHATTER_LABELS, cfg))
+        self.row(f, 1, "Follow", self.radios(f, "focus", FOCUS_LABELS, cfg))
+        self.row(f, 2, "Your name", self.entry(f, "driver_name", cfg))
+        self.note(f, 3, "As the booth should say it. Empty: the name your sim uses.")
+        self.row(f, 4, "Pit lane", self.check(f, "pit_reporter", "A pit-lane reporter covers the stops", cfg))
         laps = ttk.Frame(f, style="Card.TFrame")
-        e = entry(laps, "demo_laps", width=5)
-        e.pack(side="left")
+        self.entry(laps, "demo_laps", cfg, width=5).pack(side="left")
         ttk.Label(laps, text="  laps", style="Card.TLabel", foreground=P["mut"]).pack(side="left")
-        row(f, 5, "Demo race", laps, sticky="w")
+        self.row(f, 5, "Demo race", laps, sticky="w")
 
-        # voices
-        f = page("  Voices  ")
-        row(f, 0, "Speech", combo(f, "tts", list(TTS_LABELS), TTS_LABELS))
+        # ---------------------------------------------------------------- Voices
+        f = page("Voices")
+        self.row(f, 0, "Speech", self.check(f, "tts", "The booth speaks (off: text only)", cfg, on="on", off="off"))
         self.voice_boxes = {}
         r = 1
         for who, label in (("lead", "Lead commentator"), ("analyst", "Analyst"), ("pit", "Pit-lane reporter")):
-            row(f, r, label, entry(f, f"{who}_name"),
-                ttk.Button(f, text="Test", style="Small.TButton", command=lambda w=who: self.test_voice(w)))
-            cb = ttk.Combobox(f, state="readonly", width=40)
+            self.row(f, r, label, self.entry(f, f"{who}_name", cfg),
+                     ttk.Button(f, text="Test", style="Small.TButton", command=lambda w=who: self.test_voice(w)))
+            cb = ttk.Combobox(f, state="readonly", width=44, values=[n for n, _ in VOICES], height=18)
+            cb.set(VOICE_LABEL.get(cfg.get(f"{who}_voice"), VOICES[0][0]))
             self.voice_boxes[who] = cb
-            row(f, r + 1, "   voice", cb)
+            self.row(f, r + 1, "   voice", cb)
             r += 2
-        self.v["volume"] = tk.DoubleVar(value=float(cfg.get("volume", 0.9)))
-        row(f, r, "Volume", ttk.Scale(f, from_=0, to=1, variable=self.v["volume"]))
         outs = []
         try:
             outs = cast.audio.list_outputs() if hasattr(cast.audio, "list_outputs") else []
         except Exception:
             outs = []
-        row(f, r + 1, "Play on", combo(f, "audio_out", [""] + outs, {"": "Windows default", **{o: o for o in outs}}))
-        self.vnote = ttk.Label(f, text="", style="Card.TLabel", foreground=P["mut"], font=app.f["small"],
-                               wraplength=460, justify="left")
-        self.vnote.grid(row=r + 2, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        self._fill_voices(cfg)
-        self.v["tts"][0].trace_add("write", lambda *a: self._fill_voices(self._collect()))
+        cur_out = cfg.get("audio_out") or ""
+        if cur_out and cur_out not in outs:
+            outs.append(cur_out)
+        self.row(f, r, "Play on", self.combo(f, "audio_out", [""] + outs, {"": "Windows default", **{o: o for o in outs}}, cfg),
+                 ttk.Button(f, text="Test", style="Small.TButton", command=lambda: self.test_voice("lead")))
+        self.v["volume"] = tk.DoubleVar(value=float(cfg.get("volume", 0.9)))
+        self.row(f, r + 1, "Volume", ttk.Scale(f, from_=0, to=1, variable=self.v["volume"]))
+        self.v["speech_rate"] = tk.DoubleVar(value=float(cfg.get("speech_rate", 0)))
+        self.row(f, r + 2, "Speed", ttk.Scale(f, from_=-20, to=20, variable=self.v["speech_rate"]))
+        self.note(f, r + 3, "Microsoft and Google voices need the internet. Kokoro voices run on this PC (a one-time "
+                            "download of about 115 MB). OpenAI voices use your OpenAI key and are the most lifelike. "
+                            "If a voice can't be reached, the line is spoken by Kokoro, Google or Windows instead.")
 
-        # AI
-        f = page("  AI colour  ")
-        ttk.Label(f, style="Card.TLabel", foreground=P["mut"], wraplength=470, justify="left",
-                  text="The booth calls every moment on its own. With an AI key, the analyst also reacts to big "
-                       "moments, quiet spells become real conversation about the race, and there's a proper "
-                       "sign-off at the end. SimCast uses SimCoach's AI settings, or a key you add here (it stays "
-                       "on this PC).").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
-        self.v["ai_colour"] = tk.BooleanVar(value=bool(cfg.get("ai_colour", True)))
-        row(f, 1, "AI booth", ttk.Checkbutton(f, text="On", variable=self.v["ai_colour"]))
-        row(f, 2, "Provider", combo(f, "ai_provider", list(PROVIDER_LABELS), PROVIDER_LABELS))
+        # ---------------------------------------------------------------- AI
+        f = page("AI")
+        self.note(f, 0, "Without AI the booth calls every moment from its own lines. With a key, the analyst reacts "
+                        "with real analysis, quiet spells become conversation, and there's a sign-off at the end. "
+                        "Keys stay on this PC.", span=3)
+        self.row(f, 1, "AI commentary", self.check(f, "ai_colour", "On", cfg))
+        self.row(f, 2, "Use first", self.combo(f, "ai_provider", list(PROVIDERS), PROVIDERS, cfg))
+        self.row(f, 3, "", self.check(f, "ai_fallback", "If it's down or out of credit, use another provider with a key", cfg))
         has = cast.state()["settings"]["keys"]
-        for i, (k, label) in enumerate((("openai_api_key", "OpenAI key"), ("gemini_api_key", "Gemini key"),
-                                         ("deepseek_api_key", "DeepSeek key"))):
-            row(f, 3 + i, label, entry(f, k, show="•"),
-                ttk.Label(f, text="✓ set" if has.get(k) else "", style="Card.TLabel", foreground=P["green"]))
+        self.model_boxes = {}
+        r = 4
+        for p, label in PROVIDERS.items():
+            self.row(f, r, f"{label} key", self.entry(f, f"{p}_api_key", cfg, show="•"),
+                     ttk.Label(f, text="✓ set" if has.get(f"{p}_api_key") else "", style="Card.TLabel",
+                               foreground=P["green"]))
+            cb = ttk.Combobox(f, state="readonly", width=44)
+            self._fill_models(cb, p, cfg)
+            self.model_boxes[p] = cb
+            self.row(f, r + 1, "   model", cb)
+            r += 2
+        tts = ttk.Combobox(f, state="readonly", width=44)
+        self._fill_tts(tts, cfg)
+        self.tts_box = tts
+        self.row(f, r, "OpenAI speech", tts)
+        imp = providers.import_simcoach_keys()
+        if imp:
+            ttk.Button(f, text="Copy keys from SimCoach", style="Small.TButton",
+                       command=lambda: self._import(imp)).grid(row=r + 1, column=1, sticky="w", pady=(6, 0))
         st = cast.state()
-        ttk.Label(f, style="Card.TLabel", foreground=P["green"] if st["ai"] else P["mut"],
-                  text=f"Now using: {st['ai']}" if st["ai"] else "No AI key yet: the built-in booth is on its own."
-                  ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Label(f, style="Card.TLabel", foreground=P["green"] if st["ai"] else P["mut"], wraplength=500,
+                  text=(f"Now using: {st['ai']}" if st["ai"] else "No AI key yet: the booth uses its own lines.") +
+                       (f"\nLast problem: {st['ai_error']}" if st.get("ai_error") else "")
+                  ).grid(row=r + 2, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
-        b = ttk.Frame(w, style="Card.TFrame", padding=(18, 0, 18, 16))
-        b.pack(fill="x")
-        ttk.Button(b, text="Save", style="Accent.TButton", command=self.save).pack(side="right")
-        ttk.Button(b, text="Cancel", command=w.destroy).pack(side="right", padx=8)
+        # ---------------------------------------------------------------- Sims
+        f = page("Sims")
+        self.row(f, 0, "Game setup", self.check(f, "game_setup", "Set up EA WRC, DiRT Rally 2.0 and ACC automatically", cfg))
+        self.note(f, 1, "Switches on the data these games send (backing up what it changes). Restart a game once "
+                        "after it's been set up.")
+        self.row(f, 2, "F1 25 port", self.entry(f, "f1_port", cfg, width=8), sticky="w")
+        self.row(f, 3, "SimHub", self.check(f, "udp_share_simhub", "Share UDP port 20777 with SimHub", cfg))
+        self.note(f, 4, "Whole field: Le Mans Ultimate, rFactor 2, iRacing, Automobilista 2, RaceRoom, F1 25, ACC, "
+                        "Assetto Corsa (with the CrewChiefEx app). Your car only: AC EVO, Assetto Corsa without "
+                        "CrewChiefEx. Rally stages: EA SPORTS WRC, DiRT Rally 2.0, AC Rally. The Guide has the "
+                        "one-time game settings.", span=3)
+
+        # ---------------------------------------------------------------- About
+        f = page("About")
+        top = ttk.Frame(f, style="Card.TFrame")
+        top.grid(row=0, column=0, columnspan=3, sticky="w")
+        if app.img_logo:
+            ttk.Label(top, image=app.img_logo, style="Card.TLabel").pack(side="left", padx=(0, 10))
+        ttk.Label(top, text=f"SimCast {APP_VERSION}", style="Card.TLabel", font=self.f["h1"]).pack(side="left")
+        self.note(f, 1, "Live TV-style commentary for sim racing. MIT License, Copyright (c) 2026 Jcedwar61. "
+                        "SimCast works on its own: SimCoach doesn't need to be installed.", span=3)
+        b = ttk.Frame(f, style="Card.TFrame")
+        b.grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Button(b, text="Guide", style="Small.TButton", command=app.open_guide).pack(side="left", padx=(0, 6))
+        ttk.Button(b, text="Licences", style="Small.TButton",
+                   command=lambda: app.open_guide("About and licences")).pack(side="left", padx=6)
+        ttk.Button(b, text="Open log folder", style="Small.TButton",
+                   command=lambda: _open_path(APP_DIR)).pack(side="left", padx=6)
+
+        bb = ttk.Frame(w, style="Card.TFrame", padding=(18, 0, 18, 16))
+        bb.pack(fill="x")
+        ttk.Button(bb, text="Save", style="Accent.TButton", command=self.save).pack(side="right")
+        ttk.Button(bb, text="Cancel", command=w.destroy).pack(side="right", padx=8)
         w.update_idletasks()
         x = app.root.winfo_rootx() + (app.root.winfo_width() - w.winfo_reqwidth()) // 2
-        y = app.root.winfo_rooty() + 70
+        y = app.root.winfo_rooty() + 50
         w.geometry(f"+{max(0, x)}+{max(0, y)}")
 
-    def _fill_voices(self, cfg):
-        openai = cfg.get("tts") == "openai"
-        for who, cb in self.voice_boxes.items():
-            key = (f"openai_{who}_voice" if openai else f"{who}_voice")
-            cur = cb.get() if getattr(cb, "_key", None) == key else (cfg.get(key) or DEFAULTS.get(key))
-            cb.configure(values=OPENAI_VOICES if openai else EDGE_VOICES)
-            cb.set(cur)
-            cb._key = key
-        self.vnote.configure(text="OpenAI voices speak every line with its own direction (calm, excited, "
-                             "thrilled). They use your OpenAI key." if openai else
-                             "Free Microsoft neural voices (needs the internet). Excitement comes through in pace, "
-                             "pitch and volume.")
+    # ---------------------------------------------------------------- widgets
+    def row(self, f, r, label, widget, extra=None, sticky="ew"):
+        ttk.Label(f, text=label, style="Card.TLabel", foreground=P["mut"]).grid(row=r, column=0, sticky="w",
+                                                                               padx=(0, 14), pady=4)
+        widget.grid(row=r, column=1, sticky=sticky, pady=4)
+        if extra is not None:
+            extra.grid(row=r, column=2, sticky="w", padx=(8, 0), pady=4)
+
+    def note(self, f, r, text, span=2):
+        ttk.Label(f, text=text, style="Card.TLabel", foreground=P["mut"], font=self.f["small"], wraplength=520,
+                  justify="left").grid(row=r, column=0 if span == 3 else 1, columnspan=span, sticky="w", pady=(0, 6))
+
+    def radios(self, f, key, labels, cfg):
+        fr = ttk.Frame(f, style="Card.TFrame")
+        var = self.v[key] = tk.StringVar(value=cfg.get(key))
+        for k, lab in labels.items():
+            ttk.Radiobutton(fr, text=lab, value=k, variable=var).pack(side="left", padx=(0, 14))
+        return fr
+
+    def entry(self, f, key, cfg, show=None, width=30):
+        var = self.v[key] = tk.StringVar(value="" if show else str(cfg.get(key) or ""))
+        return ttk.Entry(f, textvariable=var, width=width, show=show or "")
+
+    def check(self, f, key, text, cfg, on=True, off=False):
+        var = tk.BooleanVar(value=cfg.get(key) == on)
+        self.v[key] = ("check", var, on, off)
+        return ttk.Checkbutton(f, text=text, variable=var)
+
+    def combo(self, f, key, values, labels, cfg):
+        var = tk.StringVar(value=labels.get(cfg.get(key), cfg.get(key) or ""))
+        self.v[key] = (var, {v: k for k, v in labels.items()})
+        return ttk.Combobox(f, textvariable=var, values=[labels[x] for x in values], state="readonly", width=44)
+
+    def _fill_models(self, cb, p, cfg):
+        best = providers.best_model(cfg, p)
+        choices = providers.model_choices(cfg, p)
+        labels = [f"Automatic (best: {best})"] + choices
+        cb.configure(values=labels)
+        cur = cfg.get(f"{p}_model") or providers.AUTO
+        cb.set(labels[0] if cur == providers.AUTO or cur not in choices else cur)
+
+    def _fill_tts(self, cb, cfg):
+        d = providers.detected(cfg, "openai")
+        choices = (d["tts"] if d and d["tts"] else [providers.TTS_FALLBACK])[:8]
+        labels = [f"Automatic (best: {providers.tts_model(dict(cfg, openai_tts_model=providers.AUTO))})"] + choices
+        cb.configure(values=labels)
+        cur = cfg.get("openai_tts_model") or providers.AUTO
+        cb.set(labels[0] if cur == providers.AUTO or cur not in choices else cur)
+
+    def _import(self, keys):
+        self.app.cast.update_settings(keys)
+        self.win.destroy()
+        self.app.open_settings()
+        self.app.settings_win.nb.select(2)
 
     def _collect(self):
         out = {}
         for k, var in self.v.items():
-            if isinstance(var, tuple):
+            if isinstance(var, tuple) and var[0] == "check":
+                out[k] = var[2] if var[1].get() else var[3]
+            elif isinstance(var, tuple):
                 txt, back = var[0].get(), var[1]
                 out[k] = back.get(txt, txt)
             else:
                 out[k] = var.get()
-        for cb in self.voice_boxes.values():
-            out[cb._key] = cb.get()
-        try:
-            out["demo_laps"] = int(out.get("demo_laps") or 8)
-        except ValueError:
-            out["demo_laps"] = 8
+        by_label = {n: v for n, v in VOICES}
+        for who, cb in self.voice_boxes.items():
+            out[f"{who}_voice"] = by_label.get(cb.get(), DEFAULTS[f"{who}_voice"])
+        for p, cb in self.model_boxes.items():
+            val = cb.get()
+            out[f"{p}_model"] = providers.AUTO if val.startswith("Automatic") else val
+        val = self.tts_box.get()
+        out["openai_tts_model"] = providers.AUTO if val.startswith("Automatic") else val
+        for k in ("demo_laps", "f1_port"):
+            try:
+                out[k] = int(out.get(k) or DEFAULTS[k])
+            except ValueError:
+                out[k] = DEFAULTS[k]
+        out["speech_rate"] = int(round(float(out.get("speech_rate", 0))))
         return out
 
     def test_voice(self, who):
@@ -695,3 +787,88 @@ class SettingsWindow:
     def save(self):
         self.app.cast.update_settings(self._collect())
         self.win.destroy()
+
+
+class GuideWindow:
+    """The built-in guide: topics on the left, the page on the right."""
+
+    def __init__(self, app, topic=None):
+        self.app = app
+        self.win = w = tk.Toplevel(app.root)
+        w.title("SimCast guide")
+        w.configure(bg=P["bg"])
+        w.geometry("980x640")
+        w.minsize(720, 460)
+        dark_titlebar(w)
+        w.columnconfigure(1, weight=1)
+        w.rowconfigure(0, weight=1)
+        self.topics = list(GUIDE) + [("About and licences", None)]
+        side = tk.Frame(w, bg=P["panel"], padx=8, pady=10)
+        side.grid(row=0, column=0, sticky="ns")
+        self.buttons = []
+        for i, (title, _) in enumerate(self.topics):
+            b = tk.Label(side, text=title, anchor="w", bg=P["panel"], fg=P["mut"], font=app.f["ui"], padx=12,
+                         pady=7, cursor="hand2", width=26)
+            b.pack(fill="x")
+            b.bind("<Button-1>", lambda e, i=i: self.show(i))
+            self.buttons.append(b)
+        body = tk.Frame(w, bg=P["panel"])
+        body.grid(row=0, column=1, sticky="nsew", padx=(10, 16), pady=16)
+        body.rowconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
+        self.text = tk.Text(body, bg=P["panel"], fg=P["fg"], relief="flat", wrap="word", font=app.f["line"],
+                            padx=22, pady=16, highlightthickness=0, borderwidth=0, spacing1=2, spacing3=6,
+                            cursor="arrow")
+        self.text.grid(row=0, column=0, sticky="nsew")
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.text.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        self.text.configure(yscrollcommand=sb.set)
+        self.text.tag_configure("h", font=app.f["h1"], foreground=P["fg"], spacing1=14, spacing3=8)
+        self.text.tag_configure("b", lmargin1=8, lmargin2=26)
+        self.text.tag_configure("mono", font=("Consolas", 9), foreground=P["mut"])
+        names = [t for t, _ in self.topics]
+        self.show(names.index(topic) if topic in names else 0)
+
+    def show(self, i):
+        for k, b in enumerate(self.buttons):
+            b.configure(bg=P["panel2"] if k == i else P["panel"], fg=P["fg"] if k == i else P["mut"])
+        title, body = self.topics[i]
+        t = self.text
+        t.configure(state="normal")
+        t.delete("1.0", "end")
+        if body is None:
+            self._licences()
+        else:
+            for line in body.strip().splitlines():
+                if line.startswith("## "):
+                    t.insert("end", line[3:] + "\n", "h")
+                elif line.startswith("- "):
+                    t.insert("end", "•  " + line[2:] + "\n", "b")
+                elif line.strip():
+                    t.insert("end", line + "\n")
+        t.configure(state="disabled")
+        t.yview_moveto(0)
+        self.current = title
+
+    def _licences(self):
+        t = self.text
+        t.insert("end", f"SimCast {APP_VERSION}\n", "h")
+        t.insert("end", "SimCast is free software under the MIT License. It works on its own; SimCoach isn't needed.\n")
+        for name, title in (("LICENSE.txt", "SimCast licence (MIT)"), ("THIRD_PARTY_NOTICES.txt", "Third-party notices")):
+            t.insert("end", title + "\n", "h")
+            try:
+                with open(os.path.join(LICENSE_DIR, name), encoding="utf-8") as fh:
+                    t.insert("end", fh.read() + "\n", "mono")
+            except Exception:
+                t.insert("end", f"({name} is missing from this installation)\n", "mono")
+        t.insert("end", "Full licence texts referred to above (LGPL-3.0, GPL-3.0) are in the licenses folder of the "
+                        "SimCast installation.\n")
+
+
+def _open_path(path):
+    try:
+        os.makedirs(path, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(path)                    # noqa: S606 (opens the folder in Explorer)
+    except Exception:
+        pass

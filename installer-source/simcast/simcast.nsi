@@ -4,6 +4,7 @@
 ; /S installs silently with every part.
 
 Unicode true
+Target amd64-unicode           ; 64-bit, like Windows 10/11 and every Wine/Proton prefix a sim runs in
 SetCompressor /SOLID lzma
 RequestExecutionLevel user
 ManifestDPIAware true
@@ -97,7 +98,7 @@ Section "SimCast" SecApp
 
   DetailPrint "Copying SimCast's files..."
   File "sim_cast.py"
-  File "sim_coach.py"
+  Delete "$INSTDIR\sim_coach.py"           ; SimCast 1.0 needed it; SimCast stands alone now
   File "SimCast.exe"
   File "SimCast.ico"
   File "SimCast.bat"
@@ -108,6 +109,8 @@ Section "SimCast" SecApp
   File "simcast\*.py"
   SetOutPath "$INSTDIR\simcast\assets"
   File "simcast\assets\*.png"
+  SetOutPath "$INSTDIR\simcast\licenses"
+  File "simcast\licenses\*.txt"
   SetOutPath "$INSTDIR"
 
   WriteUninstaller "$INSTDIR\${UNINSTALLER}"
@@ -128,21 +131,16 @@ SectionEnd
 
 Section "Python and packages" SecParts
   SectionIn RO
-  AddSize 250000
-  DetailPrint "Getting the Python runner (uv)..."
-  nsExec::ExecToLog '${PS} -File "$INSTDIR\install.ps1" -Dest "$INSTDIR" -Step uv'
-  Pop $0
-  ${If} $0 != 0
-    StrCpy $Partial 1
-  ${EndIf}
-  DetailPrint "Installing Python 3.12 and SimCast's packages (a few minutes the first time)..."
+  AddSize 400000
+  ; SimCast.exe does this itself (no PowerShell, so it works under Wine too): uv, Python 3.12, the packages.
+  ; It leaves setup-ready.txt when everything's there; without it, SimCast finishes the job when it first starts.
+  DetailPrint "Getting the Python runner, Python 3.12 and SimCast's packages (a few minutes the first time)..."
   Delete "$INSTDIR\setup-ready.txt"
-  nsExec::ExecToLog '${PS} -File "$INSTDIR\install.ps1" -Dest "$INSTDIR" -Step parts'
+  nsExec::ExecToLog '"$INSTDIR\SimCast.exe" --setup'
   Pop $0
   ${IfNot} ${FileExists} "$INSTDIR\setup-ready.txt"
     StrCpy $Partial 1
   ${EndIf}
-  Delete "$INSTDIR\setup-ready.txt"
 SectionEnd
 
 Section "Desktop shortcut" SecDesktop
@@ -175,8 +173,8 @@ SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "SimCast itself (required)."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecParts} "Python 3.12 and SimCast's packages, downloaded now so the first \
-start is quick (required)."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecParts} "Python 3.12, SimCast's packages and voices, downloaded now so \
+the first start is quick (required)."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A SimCast icon on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecStart} "SimCast in the Start menu."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END

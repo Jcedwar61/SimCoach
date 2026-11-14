@@ -710,6 +710,12 @@ class Writer:
         me = self.tr.player()
         if f is None or me is None or not f.position:
             return []
+        state = (f.position, round(f.gap_ahead or 0, 0), round(f.gap_behind or 0, 0))
+        if state == getattr(self, "_solo_state", None):           # nothing new to say about where the car is
+            if not lead_in:
+                return []
+            return [Line(who, f"{lead_in}, {self.n(me.id, now)} still {place(f.position) if f.position > 1 else 'leading'}.", 1)]
+        self._solo_state = state
         bits = [f"{lead_in}{': ' if lead_in else ''}{self.n(me.id, now)} is {place(f.position) if f.position > 1 else 'leading'}"]
         if f.car_ahead and f.gap_ahead and f.position > 1:
             bits.append(f"{gap_words(f.gap_ahead)} behind {call_name(f.car_ahead.get('name', ''))}")

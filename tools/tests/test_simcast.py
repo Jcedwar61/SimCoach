@@ -6,10 +6,14 @@ import re
 import struct
 import sys
 
-from _common import REPO, check, done, load
+import tempfile
 
-sc = load()
+from _common import REPO, check, done
+
+os.environ["APPDATA"] = tempfile.mkdtemp(prefix="simcast-test-")
 sys.path.insert(0, REPO)
+from simcast import sims as sc                        # noqa: E402  (SimCast's own readers: no SimCoach)
+from simcast import providers                         # noqa: E402
 from simcast import ai as ai_mod                      # noqa: E402
 from simcast.app import DEFAULTS, SimCast, headless_run    # noqa: E402
 from simcast.audio import SimAudio                    # noqa: E402
@@ -121,7 +125,7 @@ while t < 5 + 61 * 3 + 10:
 check("final_lap" in tr2_ev and "winner" in tr2_ev and "player_finish" in tr2_ev, "final lap, winner, player's finish")
 
 # ---------------------------------------------------------------- whole demo race through the booth
-cast = headless_run(sc, laps=6, seed=5, log=lambda m: None)
+cast = headless_run(laps=6, seed=5, log=lambda m: None)
 spoken = [ln for _, ln in cast.audio.spoken]
 text = " ".join(ln.text for ln in spoken)
 check(not cast.errors, f"demo race: no errors ({list(cast.errors)})")
@@ -158,10 +162,10 @@ def fake_chat(cfg, messages, max_tokens=300, timeout=20.0):
     return "not json at all"
 
 
-booth = ai_mod.AIBooth(lambda: dict(DEFAULTS, openai_api_key="test", ai_colour=True), fake_chat, sc._json_reply,
+booth = ai_mod.AIBooth(lambda: dict(DEFAULTS, openai_api_key="test", ai_colour=True), fake_chat, providers._json_reply,
                        log=lambda m: None)
 booth.sync = True
-cast = headless_run(sc, laps=5, seed=5, booth=booth, log=lambda m: None)
+cast = headless_run(laps=5, seed=5, booth=booth, log=lambda m: None)
 said = [ln.text for _, ln in cast.audio.spoken]
 check(any(t.startswith("AI-REACT") for t in said), "AI booth: the analyst reacts to big moments")
 check(any(t.startswith("AI-FILLER") for t in said), "AI booth: quiet spells become conversation")
@@ -177,9 +181,9 @@ def broken_chat(cfg, messages, max_tokens=300, timeout=20.0):
     raise RuntimeError("network down")
 
 
-booth = ai_mod.AIBooth(lambda: dict(DEFAULTS, openai_api_key="test"), broken_chat, sc._json_reply, log=lambda m: None)
+booth = ai_mod.AIBooth(lambda: dict(DEFAULTS, openai_api_key="test"), broken_chat, providers._json_reply, log=lambda m: None)
 booth.sync = True
-cast = headless_run(sc, laps=4, seed=5, booth=booth, log=lambda m: None)
+cast = headless_run(laps=4, seed=5, booth=booth, log=lambda m: None)
 said = " ".join(ln.text for _, ln in cast.audio.spoken)
 check("that's the result here" in said and not cast.errors, "AI booth down: the built-in booth carries on, wrap-up included")
 check(booth.failures >= 3 and booth.disabled_until > 0, "AI booth down: it backs off instead of retrying every few seconds")
@@ -232,8 +236,7 @@ check(("overtake", 3, 7) in kinds and ("collision", 1, 2) in kinds and ("fastest
       any(e["type"] == "penalty" and e["car"] == 5 and e["seconds"] == 5 for e in f1.events), f"F1 events ({kinds})")
 
 # ---------------------------------------------------------------- settings
-cast = SimCast(sc, dict(DEFAULTS), audio=SimAudio(), log=lambda m: None, booth=False, save=False)
-cast._simcoach_t = 1e18
+cast = SimCast(dict(DEFAULTS), audio=SimAudio(), log=lambda m: None, booth=False, save=False)
 cast.update_settings({"chatter": "chatty", "openai_api_key": "sk-secret-123456", "bogus": 1})
 check(cast.cfg["chatter"] == "chatty" and "bogus" not in cast.cfg, "settings: change, unknown keys ignored")
 cast.update_settings({"chatter": "shouty", "volume": 7, "openai_api_key": ""})
@@ -248,5 +251,191 @@ cast.stop_demo()
 check(cast.demo is None and not cast.source, "demo race stops")
 for asset in ("icon-256.png", "icon-48.png", "logo-40.png", "hero-car-240.png", "helmet-32.png"):
     check(os.path.getsize(os.path.join(REPO, "simcast", "assets", asset)) > 500, f"asset {asset}")
+
+# ---------------------------------------------------------------- stands alone
+import ast  # noqa: E402
+for root, _d, files in os.walk(os.path.join(REPO, "simcast")):
+    for fn in files:
+        if fn.endswith(".py"):
+            tree = ast.parse(open(os.path.join(root, fn), encoding="utf-8").read())
+            mods = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module} | \
+                   {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+            check("sim_coach" not in mods, f"stands alone: {fn} doesn't import sim_coach")
+check("sim_coach" not in sys.modules, "stands alone: SimCoach never loaded")
+
+# ---------------------------------------------------------------- AI: the best model, picked automatically
+class _M:
+    def __init__(self, i, c):
+        self.id, self.created = i, c
+
+
+class _FakeClient:
+    def __init__(self, ids):
+        self.ids = ids
+        self.models = self
+
+    def with_options(self, **kw):
+        return self
+
+    def list(self):
+        return [_M(i, c) for i, c in self.ids]
+
+
+real_client = providers.openai_client
+cfg = dict(DEFAULTS, openai_api_key="k-openai", gemini_api_key="k-gemini")
+check(providers.ai_model(cfg, "openai") == providers.PREFERRED["openai"][0], "AI: before asking, the first preferred model")
+providers.openai_client = lambda key, base=None: _FakeClient(
+    [("gpt-5.6-luna", 1), ("gpt-6.1-terra", 2), ("gpt-6-luna-tts", 3), ("gpt-4o", 0), ("text-embedding-3", 1)]
+    if key == "k-openai" else [("models/gemini-3.1-pro-preview", 1), ("models/gemini-3.5-flash-lite", 2)])
+providers.detect_models(cfg, "openai")
+providers.detect_models(cfg, "gemini")
+check(providers.ai_model(cfg, "openai") == "gpt-6.1-terra", "AI: OpenAI picks the best model this key can use")
+check(providers.ai_model(cfg, "gemini") == "gemini-3.1-pro-preview", "AI: Gemini too (ids without 'models/')")
+check(providers.tts_model(cfg) == "gpt-6-luna-tts", "AI: the newest OpenAI speech model is picked for OpenAI voices")
+check("gpt-4o" not in providers.model_choices(cfg, "openai") and "text-embedding-3" not in providers.model_choices(cfg, "openai"),
+      "AI: retired and non-chat models aren't offered")
+check(providers.ai_model(dict(cfg, openai_model="gpt-5.6-luna"), "openai") == "gpt-5.6-luna", "AI: a model picked by hand wins")
+providers.openai_client = real_client
+check(providers.ai_model(dict(cfg, deepseek_api_key="k"), "deepseek") == "deepseek-chat", "AI: DeepSeek's default")
+
+# ---------------------------------------------------------------- solo mode (one car) and rally mode
+from simcast.solo import StageStore  # noqa: E402
+
+
+def drive(fn, until, cfg=None):
+    a = SimAudio()
+    c = SimCast(dict(DEFAULTS, game_setup=False, **(cfg or {})), audio=a, log=lambda m: None, booth=False, save=False)
+    c.stages = StageStore(None)
+    t = 0.0
+    while t < until:
+        f = fn(t)
+        if f is not None:
+            c.feed(f, t)
+        c.tick(t)
+        a.tick(t)
+        t += 1 / 30
+    return c, " ".join(ln.text for _, ln in a.spoken)
+
+
+def solo_frame(t):
+    lap = 80.0
+    laps = int(max(0, t - 6) // lap)
+    pct = (max(0, t - 6) % lap) / lap
+    pos = 6 if t < 100 else 5
+    f = sc.Frame("AC EVO", "Imola", "Ferrari 296 GT3", laps, pct, 0 if t < 6 else 150, 1, 0, 0, 4, 7000, pct * lap,
+                 lap if laps else 0.0, False, False, track_len=4900.0, session="race", position=pos, cars=20,
+                 race_laps=4, gap_ahead=2.0, gap_behind=1.5)
+    f.car_ahead, f.car_behind = {"name": "Alex Rivera"}, {"name": "Kim Bauer"}
+    f.race_over = laps >= 4
+    return f
+
+
+c, said = drive(solo_frame, 340, {"driver_name": "Sam Carter"})
+check(c.mode == "solo" and not c.errors, f"solo: one car, its own mode ({c.mode}, {list(c.errors)})")
+check("following Sam Carter" in said and re.search(r"past Rivera", said) and
+      re.search(r"(chequered flag|crossing the line) in fifth", said),
+      "solo: the intro, a place gained past the car ahead, the finish")
+check(said.count("two seconds behind Rivera") <= 2, "solo: doesn't keep repeating the same running position")
+check("Fastest lap of the race" not in said and " wins" not in said, "solo: never calls a 'race winner' or 'fastest lap' it can't know")
+
+L = 5000.0
+
+
+def stage_frame(t):
+    starts, durs = [3, 160], [150, 140]
+    runs = sum(1 for st, d in zip(starts, durs) if t >= st + d)
+    for st, d in zip(starts, durs):
+        if st <= t < st + d:
+            el = t - st
+            return sc.Frame("EA WRC", "Monte Carlo - Col de Turini", "Hyundai i20 N Rally1", runs, el / d,
+                            130.0, 1, 0, 0, 4, 6000, el, durs[runs - 1] if runs else 0.0, False, False, track_len=L)
+    return sc.Frame("EA WRC", "Monte Carlo - Col de Turini", "Hyundai i20 N Rally1", runs, 0.99999 if runs else 0.0,
+                    0, 0, 0, 0, 0, 900, 0.0, durs[runs - 1] if runs else 0.0, False, False, track_len=L)
+
+
+c, said = drive(stage_frame, 320, {"driver_name": "Sam Carter"})
+check(c.mode == "rally" and not c.errors, f"rally: its own mode ({c.mode})")
+check("Col de Turini" in said and re.search(r"away|Go!|off the line", said), "rally: the stage and the launch")
+check("halfway split" in said and "up on the best" in said, "rally: splits against the best run on the second run")
+check("new best on this stage by ten seconds" in said, "rally: a new stage best, by how much")
+check(c.stages.get("EA WRC|Monte Carlo - Col de Turini|Hyundai i20 N Rally1")["best"] == 140.0, "rally: the best run is kept")
+
+# ---------------------------------------------------------------- ACC's broadcasting API
+from simcast.acc_broadcast import ACCBroadcast, read_config  # noqa: E402
+
+
+def s_(x):
+    b = x.encode()
+    return struct.pack("<H", len(b)) + b
+
+
+def lap(ms):
+    return struct.pack("<iHHB", ms, 0, 0, 0) + bytes(4)
+
+
+bc = ACCBroadcast(tempfile.mkdtemp(), log=lambda m: None)
+bc.handle(bytes([1]) + struct.pack("<iBB", 7, 1, 1) + s_(""))
+check(bc.conn_id == 7, "ACC: registered")
+for idx, first, lastn, num in ((3, "Ana", "Silva", 88), (5, "Ben", "Okoro", 7)):
+    bc.handle(bytes([6]) + struct.pack("<HB", idx, 1) + s_("Team") + struct.pack("<iBBHB", num, 0, 0, 1, 1) +
+              s_(first) + s_(lastn) + s_(lastn[:3].upper()) + struct.pack("<BH", 0, 1))
+bc.handle(bytes([2]) + struct.pack("<HHBBffi", 0, 0, 10, 5, 600000.0, 3600000.0, 5) + s_("set") + s_("cam") + s_("hud")
+          + bytes([0]) + struct.pack("<fBBBBB", 50000.0, 20, 25, 0, 0, 0) + lap(101000))
+for idx, pos, spline, loc in ((3, 1, 0.42, 1), (5, 2, 0.40, 2)):
+    bc.handle(bytes([3]) + struct.pack("<HHBBfffBHHHHfHi", idx, 0, 1, 4, 0, 0, 0, loc, 180, pos, pos, pos, spline, 3, 0)
+              + lap(101500) + lap(102000) + lap(50000))
+bc.handle(bytes([7, 4]) + s_("Accident") + struct.pack("<ii", 1000, 5))
+fe = sorted(bc.field(sc.field_entry), key=lambda e: e["position"])
+check([e["name"] for e in fe] == ["Ana Silva", "Ben Okoro"] and fe[1]["in_pit"] and fe[1]["player"] and fe[0]["laps"] == 3
+      and fe[0]["last"] == 102.0 and bc.session["type"] == "race", f"ACC: the grid from the broadcasting API ({fe})")
+check(bc.events() == [{"type": "accident", "car": 5}], "ACC: the game's accident event")
+check(read_config(tempfile.mkdtemp()) == (9000, "asd"), "ACC: default port and password when there's no file")
+
+# ---------------------------------------------------------------- game setup
+from simcast import gamesetup  # noqa: E402
+docs = tempfile.mkdtemp()
+wrc = os.path.join(docs, "My Games", "WRC", "telemetry")
+os.makedirs(os.path.join(wrc, "udp"))
+json.dump({"schema": 1, "udp": {"packets": [{"structure": "wrc", "packet": "session_update", "ip": "127.0.0.1",
+                                             "port": 20777, "bEnabled": True}]}}, open(os.path.join(wrc, "config.json"), "w"))
+dr2 = os.path.join(docs, "My Games", "DiRT Rally 2.0", "hardwaresettings")
+os.makedirs(dr2)
+open(os.path.join(dr2, "hardware_settings_config.xml"), "w").write(
+    '<hardware_settings_config>\n <motion_platform>\n  <udp enabled="false" extradata="0" ip="127.0.0.1" port="20777" '
+    'delay="1" />\n </motion_platform>\n</hardware_settings_config>\n')
+accdir = os.path.join(docs, "Assetto Corsa Competizione", "Config")
+os.makedirs(accdir)
+open(os.path.join(accdir, "broadcasting.json"), "wb").write(
+    json.dumps({"updListenerPort": 0, "connectionPassword": "pw", "commandPassword": ""}).encode("utf-16"))
+done_ = gamesetup.setup_all(log=lambda m: None, documents=docs)
+check(set(done_) == {"EA WRC", "DiRT Rally 2.0", "ACC"}, f"game setup: all three set up ({done_})")
+c2 = json.load(open(os.path.join(wrc, "config.json")))
+check(any(p["port"] == 20790 and p["structure"] == "simcast" and p["bEnabled"] for p in c2["udp"]["packets"]) and
+      any(p["structure"] == "wrc" for p in c2["udp"]["packets"]), "game setup: EA WRC sends SimCast's packet, SimHub's kept")
+st_ = json.load(open(os.path.join(wrc, "udp", "simcast.json")))
+check(st_["packets"][0]["channels"][0] == "packet_uid" and len(st_["packets"][0]["channels"]) == len(sc.WRC_CHANNELS),
+      "game setup: EA WRC packet layout matches the reader")
+x = open(os.path.join(dr2, "hardware_settings_config.xml")).read()
+check('enabled="true"' in x and 'extradata="3"' in x and os.path.exists(os.path.join(dr2, "hardware_settings_config.xml.simcast-backup")),
+      "game setup: DiRT Rally 2.0 UDP on with extradata 3, backed up")
+check(read_config(docs) == (9000, "pw"), "game setup: ACC broadcasting port on, password kept")
+check(gamesetup.setup_all(log=lambda m: None, documents=docs) == [], "game setup: a second run changes nothing")
+
+# ---------------------------------------------------------------- voices, guide, licences
+from simcast.audio import VOICES, engine_of  # noqa: E402
+check(engine_of("kokoro:bm_george") == ("kokoro", "bm_george") and engine_of("en-GB-RyanNeural")[0] == "edge" and
+      engine_of("openai:ash") == ("openai", "ash") and engine_of("google:en-GB") == ("google", "en-GB"), "voices: engines")
+fams = {engine_of(v)[0] for _, v in VOICES}
+check(fams == {"edge", "kokoro", "google", "openai"}, "voices: Microsoft, Kokoro, Google and OpenAI offered")
+from simcast.guide import TOPICS  # noqa: E402
+gtext = " ".join(t for _, t in TOPICS)
+for word in ("Play on", "Demo race", "Captions window", "install-simcast-wine.sh", "Automatic", "CrewChiefEx",
+             "EA SPORTS WRC", "DiRT Rally 2.0", "AC Rally", "AC EVO", "ACC", "iRacing", "F1 25", "Le Mans Ultimate",
+             "rFactor 2", "Automobilista 2", "RaceRoom", "Assetto Corsa"):
+    check(word in gtext, f"guide covers: {word}")
+lic = os.path.join(REPO, "simcast", "licenses")
+notice = open(os.path.join(lic, "THIRD_PARTY_NOTICES.txt")).read()
+check("MIT License" in open(os.path.join(lic, "LICENSE.txt")).read() and "The Go Authors" in notice and
+      all(n in notice for n in ("kokoro-onnx", "ONNX Runtime", "gTTS", "uv ")), "licences: SimCast MIT and the notices")
 check(os.path.exists(os.path.join(REPO, "SimCast.ico")), "SimCast.ico in the repo")
 done()

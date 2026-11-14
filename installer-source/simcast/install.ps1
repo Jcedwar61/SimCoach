@@ -1,12 +1,7 @@
-# SimCast setup steps, run by the setup wizard (SimCast-Setup.exe) one at a time with no window of their own;
-# what they print shows in the wizard's progress list.
-#   -Step close   close a SimCast running from the install folder
-#   -Step uv      find or download uv, which runs SimCast with its own Python
-#   -Step parts   Python 3.12 and SimCast's packages
-# Exit codes: 0 = done, 2 = didn't finish (SimCast finishes it on first launch), 1 = failed.
-# 'parts' also leaves setup-ready.txt in the install folder when it really finished (the wizard checks the file,
-# not the exit code: a blocked or missing PowerShell can look like success).
-param([string]$Dest = $PSScriptRoot, [ValidateSet('close', 'uv', 'parts')][string]$Step = 'parts')
+# Closes a SimCast running from the install folder before the setup wizard (SimCast-Setup.exe) replaces its files
+# or the uninstaller removes them. Everything else the installer does needs no PowerShell (SimCast.exe --setup gets
+# uv, Python and the packages), so under Wine, where there's no PowerShell, only this convenience is skipped.
+param([string]$Dest = $PSScriptRoot, [ValidateSet('close')][string]$Step = 'close')
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -45,62 +40,12 @@ function Close-SimCast {
     return $true
 }
 
-function Find-UV {
-    $c = Get-Command uv.exe -ErrorAction SilentlyContinue
-    if ($c) { return $c.Source }
-    foreach ($d in @("$env:USERPROFILE\.local\bin", "$env:USERPROFILE\.cargo\bin")) {
-        $p = Join-Path $d 'uv.exe'
-        if (Test-Path $p) { return $p }
-    }
-    return $null
-}
-
 try {
     switch ($Step) {
         'close' {
             $ErrorActionPreference = 'Continue'
             if (Close-SimCast) { Say 'Closed the SimCast that was running.' }
             exit 0
-        }
-        'uv' {
-            $uv = Find-UV
-            if (-not $uv) {
-                Say 'Downloading uv from github.com/astral-sh/uv ...'
-                try {
-                    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-                    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
-                    $bin = Join-Path $env:USERPROFILE '.local\bin'
-                    $zip = Join-Path $env:TEMP 'simcast-uv.zip'
-                    Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-$arch-pc-windows-msvc.zip" -OutFile $zip
-                    New-Item -ItemType Directory -Force -Path $bin | Out-Null
-                    Expand-Archive -Force -Path $zip -DestinationPath $bin
-                    Remove-Item $zip -Force -ErrorAction SilentlyContinue
-                } catch {
-                    Say "uv download failed: $($_.Exception.Message)"
-                }
-                $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
-                $uv = Find-UV
-            }
-            if ($uv) { Say "uv: $uv"; exit 0 }
-            Say 'uv is not installed yet; SimCast installs it the first time it starts.'
-            exit 2
-        }
-        'parts' {
-            $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
-            $uv = Find-UV
-            if (-not $uv) { Say 'Skipped: no uv yet (SimCast finishes this the first time it starts).'; exit 2 }
-            $env:PYTHONIOENCODING = 'utf-8'
-            $env:NO_COLOR = '1'
-            $env:UV_NO_PROGRESS = '1'
-            Remove-Item (Join-Path $Dest 'setup-ready.txt') -Force -ErrorAction SilentlyContinue
-            Push-Location $Dest
-            $ErrorActionPreference = 'Continue'
-            & $uv run --python 3.12 (Join-Path $Dest 'sim_cast.py') --setup 2>&1 | ForEach-Object { Say "$_" }
-            $code = $LASTEXITCODE
-            Pop-Location
-            if ($code -eq 0) { Set-Content -Path (Join-Path $Dest 'setup-ready.txt') -Value 'ok'; Say 'Ready.'; exit 0 }
-            Say "Stopped (code $code); SimCast finishes this the first time it starts."
-            exit 2
         }
     }
 }

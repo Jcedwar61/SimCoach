@@ -164,7 +164,7 @@ class ACCBroadcast:
                 self.error = f"{type(e).__name__}: {e}"
 
     def _request(self, kind):
-        if self.conn_id is not None:
+        if self.conn_id is not None and self.sock is not None:
             try:
                 self.sock.sendto(struct.pack("<Bi", kind, self.conn_id), self.addr)
             except OSError:

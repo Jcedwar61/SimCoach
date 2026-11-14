@@ -1,0 +1,115 @@
+SimCast - third-party notices
+=============================
+
+SimCast itself is released under the MIT License (LICENSE.txt, Copyright (c) 2026 Jcedwar61). Parts of it
+(the sim readers in simcast/sims.py and the AI provider code in simcast/providers.py) are adapted from
+SimCoach by the same author, under the same MIT License. SimCast does not need SimCoach to be installed.
+
+What follows is everything else SimCast ships, downloads or uses, with its licence.
+
+
+1. Shipped with SimCast
+-----------------------
+
+SimCast.exe (the launcher) is built with the Go programming language. Go's runtime and standard library are
+compiled into it:
+
+    Copyright 2009 The Go Authors.
+
+    Redistribution and use in source and binary forms, with or without modification, are permitted provided
+    that the following conditions are met:
+
+       * Redistributions of source code must retain the above copyright notice, this list of conditions and
+         the following disclaimer.
+       * Redistributions in binary form must reproduce the above copyright notice, this list of conditions
+         and the following disclaimer in the documentation and/or other materials provided with the
+         distribution.
+       * Neither the name of Google LLC nor the names of its contributors may be used to endorse or promote
+         products derived from this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+    WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+    PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY
+    DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+    HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+    POSSIBILITY OF SUCH DAMAGE.
+
+SimCast-Setup.exe is built with NSIS (Nullsoft Scriptable Install System), zlib/libpng licence,
+https://nsis.sourceforge.io/License. Copyright (C) 1999-2025 Contributors.
+
+RaceRoom car names (in simcast/sims.py) come from r3e-data.json in sector3studios/r3e-spectator-overlay
+(https://github.com/sector3studios/r3e-spectator-overlay) by Sector3 Studios / KW Studios. Only the ids, names
+and class names are used.
+
+ACC's broadcasting protocol (simcast/acc_broadcast.py) follows the message layout of Kunos Simulazioni's
+broadcasting SDK sample (ksBroadcastingNetwork), which ships with Assetto Corsa Competizione. No SDK code is
+included.
+
+The SimCast artwork (icons, the car and helmet graphics in simcast/assets) is SimCast's own.
+
+
+2. Downloaded when SimCast is installed or first run
+----------------------------------------------------
+
+The setup downloads these from their official sources (they are not modified or bundled by SimCast).
+
+uv (the Python runner) - MIT License (or Apache 2.0), Copyright (c) 2025 Astral Software Inc.
+    https://github.com/astral-sh/uv
+
+Python 3.12 - Python Software Foundation License, https://docs.python.org/3/license.html
+
+kokoro-onnx (the offline Kokoro voices) - MIT License, Copyright (c) 2025 thewh1teagle
+    https://github.com/thewh1teagle/kokoro-onnx
+
+ONNX Runtime (runs the Kokoro voice model) - MIT License, Copyright (c) Microsoft Corporation
+    https://github.com/microsoft/onnxruntime
+
+gTTS (the Google voices) - MIT License, Copyright (c) 2014-2024 Pierre Nicolas Durette
+    https://github.com/pndurette/gTTS
+
+The MIT License text for the four projects above (with each project's own copyright line, as shown):
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+    associated documentation files (the "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+    following conditions:
+
+    The above copyright notice and this permission notice shall be included in all copies or substantial
+    portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+    LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+    EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+    IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
+    THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+edge-tts (the Microsoft neural voices) - GNU Lesser General Public License v3.0 (LGPL-3.0.txt, which builds
+    on GPL-3.0.txt), https://github.com/rany2/edge-tts. Used unmodified, as a separate library.
+
+pygame (sound playback) - GNU Lesser General Public License v2.1, https://www.pygame.org. Used unmodified,
+    as a separate library; its source is at https://github.com/pygame/pygame.
+
+openai (the Python client for OpenAI, Gemini and DeepSeek) - Apache License 2.0, Copyright OpenAI,
+    https://github.com/openai/openai-python
+
+NumPy - BSD 3-Clause License, Copyright (c) 2005-2025 NumPy Developers, https://numpy.org
+psutil - BSD 3-Clause License, Copyright (c) 2009 Jay Loden, Dave Daeschler, Giampaolo Rodola
+pywin32 - Python Software Foundation License, https://github.com/mhammond/pywin32
+
+
+3. Downloaded the first time you pick a Kokoro voice
+----------------------------------------------------
+
+Kokoro-82M voice model and voices (kokoro-v1.0.int8.onnx, voices-v1.0.bin) - Apache License 2.0,
+by hexgrad (https://huggingface.co/hexgrad/Kokoro-82M), converted to ONNX by thewh1teagle.
+
+
+4. Online services
+------------------
+
+Microsoft's online speech service (the Microsoft voices), Google Translate's speech (the Google voices) and,
+with your own key, OpenAI, Google Gemini and DeepSeek. Their terms of service apply to their use. Nothing is
+sent to them but the text being spoken or the race summary the AI commentators write from.

@@ -4,6 +4,8 @@
 #   "numpy",
 #   "pygame>=2.5",
 #   "edge-tts>=6.1",
+#   "gTTS>=2.5",
+#   "kokoro-onnx>=0.4",
 #   "openai>=1.60",
 #   "psutil",
 #   "pywin32; sys_platform == 'win32'",
@@ -56,12 +58,17 @@ def main(argv=None):
     ap.add_argument("--no-voice", action="store_true")
     args = ap.parse_args(argv)
 
+    from simcast.audio import wine_numpy_guard
+    wine_numpy_guard()                      # Linux/Steam Deck: keeps an old Wine from crashing on NumPy
     from simcast import app as app_mod
 
     if args.setup:
         import importlib
-        for mod in ("edge_tts", "openai", "pygame", "numpy"):     # uv has installed them by the time this runs
+        for mod in ("edge_tts", "gtts", "openai", "pygame", "tkinter"):   # installed by uv by the time this runs
             importlib.import_module(mod)
+        from simcast.audio import kokoro_usable
+        print("Kokoro voices: " + ("ready to use" if kokoro_usable() else
+                                   "not available here (the other voices are)"))
         print("SimCast is ready.")
         return 0
 

@@ -5,18 +5,19 @@ import os
 import sys
 import time
 
-from _common import REPO, check, done, load
+import tempfile
 
-sc = load()
+from _common import REPO, check, done
+
+os.environ["APPDATA"] = tempfile.mkdtemp(prefix="simcast-gui-test-")
 sys.path.insert(0, REPO)
 from simcast.app import DEFAULTS, SimCast   # noqa: E402
 from simcast.gui import SimCastWindow       # noqa: E402
 
 SHOTS = os.environ.get("SIMCAST_SHOTS")
-cfg = dict(DEFAULTS, tts="off", driver_name="Sam Carter")
-cast = SimCast(sc, cfg, log=lambda m: None, booth=False, save=False)
-cast._simcoach_t = 1e18
-win = SimCastWindow(cast, sc)
+cfg = dict(DEFAULTS, tts="off", driver_name="Sam Carter", game_setup=False)
+cast = SimCast(cfg, log=lambda m: None, booth=False, save=False)
+win = SimCastWindow(cast)
 root = win.root
 
 
@@ -65,7 +66,8 @@ sw = win.settings_win
 check(sw is not None and sw.win.winfo_ismapped(), "settings: opens")
 sw.v["chatter"].set("chatty")
 sw.v["driver_name"].set("Sam C")
-sw.voice_boxes["analyst"].set("en-IE-EmilyNeural")
+sw.voice_boxes["analyst"].set("Emma (British) - Kokoro, offline")
+sw.model_boxes["openai"].set(sw.model_boxes["openai"].cget("values")[1])
 if SHOTS:
     try:
         from PIL import ImageGrab
@@ -78,13 +80,49 @@ if SHOTS:
 sw.save()
 pump(0.3)
 check(cast.cfg["chatter"] == "chatty" and cast.cfg["driver_name"] == "Sam C" and
-      cast.cfg["analyst_voice"] == "en-IE-EmilyNeural", "settings: saved")
-sw2 = win.open_settings() or win.settings_win
-sw2.v["tts"][0].set("OpenAI voices (most lifelike, uses your key)")
-pump(0.3)
-check(sw2.voice_boxes["lead"].cget("values")[0] == "ash", "settings: OpenAI voices offered for OpenAI speech")
+      cast.cfg["analyst_voice"] == "kokoro:bf_emma", "settings: saved (Kokoro voice for the analyst)")
+check(cast.cfg["openai_model"] not in ("", "auto") and cast.cfg["gemini_model"] == "auto",
+      f"settings: a model picked by hand, the others automatic ({cast.cfg['openai_model']})")
+check(cast.cfg["tts"] == "off", "settings: speech stays off (text only) when untouched")
+win.open_settings()
+sw2 = win.settings_win
+labels = sw2.voice_boxes["lead"].cget("values")
+check(any("Kokoro" in x for x in labels) and any("Google" in x for x in labels) and any("OpenAI" in x for x in labels)
+      and any("Microsoft" in x for x in labels), "settings: Microsoft, Kokoro, Google and OpenAI voices offered")
+check(sw2.model_boxes["openai"].cget("values")[0].startswith("Automatic (best: "), "settings: model on Automatic")
+for i in range(5):
+    sw2.nb.select(i)
+    pump(0.2)
+    if i in (1, 2, 4):
+        if SHOTS:
+            try:
+                from PIL import ImageGrab
+                sw2.win.update()
+                x, y = sw2.win.winfo_rootx(), sw2.win.winfo_rooty()
+                ImageGrab.grab(bbox=(x, y, x + sw2.win.winfo_width(), y + sw2.win.winfo_height()),
+                               xdisplay=os.environ.get("DISPLAY")).save(os.path.join(SHOTS, f"simcast-settings-{i}.png"))
+            except Exception as e:
+                print(f"(screenshot failed: {e})")
 sw2.win.destroy()
-check(cast.cfg["tts"] == "off", "settings: cancel changes nothing")
+
+win.open_guide()
+pump(0.6)
+g = win.guide_win
+check(g is not None and g.win.winfo_ismapped() and "Welcome to SimCast" in g.text.get("1.0", "end"), "guide: opens on Getting started")
+g.show(len(g.topics) - 1)
+lic = g.text.get("1.0", "end")
+check("MIT License" in lic and "The Go Authors" in lic and "kokoro-onnx" in lic, "guide: licences and notices shown")
+g.show(2)
+if SHOTS:
+    try:
+        from PIL import ImageGrab
+        g.win.update()
+        x, y = g.win.winfo_rootx(), g.win.winfo_rooty()
+        ImageGrab.grab(bbox=(x, y, x + g.win.winfo_width(), y + g.win.winfo_height()),
+                       xdisplay=os.environ.get("DISPLAY")).save(os.path.join(SHOTS, "simcast-guide.png"))
+    except Exception as e:
+        print(f"(screenshot failed: {e})")
+g.win.destroy()
 
 win.toggle_captions(True)
 pump(12)
