@@ -69,7 +69,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.12"
+APP_VERSION = "6.13"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
