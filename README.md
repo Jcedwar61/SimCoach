@@ -14,7 +14,7 @@
 ### New: SimCast, live TV commentary
 <img src="simcast/assets/icon-256.png" width="72" align="left" alt="">
 
-**[SimCast](SIMCAST.md)** gives your race the television treatment: a two-person commentary booth (plus a pit-lane reporter) calls the *whole* race live while you drive: overtakes anywhere in the field, battles, pit stops, fastest laps, cars in trouble and the finish. Run `SimCast.bat`, or try the demo race without a sim. Includes a stream overlay for OBS.
+**[SimCast](SIMCAST.md)** is a new, standalone Windows app ([SimCast-Setup.exe](SimCast-Setup.exe)): a TV commentary booth (lead, analyst and pit-lane reporter) calls the *whole* race live while you drive (overtakes anywhere in the field, battles, pit stops, fastest laps, cars in trouble and the finish), with rally-stage coverage for EA WRC, DiRT Rally 2.0 and AC Rally. Every SimCoach sim, free voices, optional AI commentary, a built-in guide, and Linux/Steam Deck support. It doesn't need SimCoach installed.
 <br clear="left">
 
 ### Install

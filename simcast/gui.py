@@ -808,7 +808,7 @@ class GuideWindow:
         self.buttons = []
         for i, (title, _) in enumerate(self.topics):
             b = tk.Label(side, text=title, anchor="w", bg=P["panel"], fg=P["mut"], font=app.f["ui"], padx=12,
-                         pady=7, cursor="hand2", width=26)
+                         pady=7, cursor="hand2", width=32)
             b.pack(fill="x")
             b.bind("<Button-1>", lambda e, i=i: self.show(i))
             self.buttons.append(b)
