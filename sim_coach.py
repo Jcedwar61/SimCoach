@@ -31,6 +31,7 @@ import random
 import re
 import atexit
 import shutil
+import socket
 import struct
 import sys
 import tempfile
@@ -3297,6 +3298,9 @@ class Voice:
         self.preempt = threading.Event()
         self._cancel = set()
         self._deferred, self._resumes = [], []
+        self._talking = False                        # speech is coming out of the speakers right now
+        self._tone_until = 0.0
+        self.link = None                             # SimCastLink: tells SimCast to drop its booth under the coach
         threading.Thread(target=self._run, daemon=True, name="voice").start()
         threading.Thread(target=self._synth_worker, daemon=True, name="voice-synth").start()
 
@@ -3333,6 +3337,18 @@ class Voice:
         if eng == "kokoro" and (self._kokoro is not None or self._kokoro_pipe):
             return 0.25
         return 0.9
+
+    def audible(self):
+        """True while the coach or crew can be heard (a line playing, or a braking tone)."""
+        return self._talking or time.monotonic() < self._tone_until
+
+    def _on_air(self, talking, tone_ms=0):
+        if tone_ms:
+            self._tone_until = max(self._tone_until, time.monotonic() + tone_ms / 1000.0)
+        else:
+            self._talking = talking
+        if self.link is not None and (talking or tone_ms):
+            self.link.ping()
 
     def idle(self, now):
         return (now >= self.busy_until and not self._deferred and not self._resumes
@@ -3371,6 +3387,7 @@ class Voice:
         BEEP_LOG.append((time.monotonic(), freq))
         if not self.enabled:
             return
+        self._on_air(True, tone_ms=ms)
         if not self._mixer:
             beep(freq, ms)
             return
@@ -3751,18 +3768,22 @@ class Voice:
                     return
                 if self._must_stop(spot):
                     return None if (spot or self._is_chat() or self._cancelled()) else Voice.SPOT_FIRST
-                with self._mlock:
-                    pygame.mixer.music.load(path)
-                    pygame.mixer.music.set_volume(float(self.cfg.get("volume", 0.9)))
-                    pygame.mixer.music.play()
-                self._started(label)
-                cut = False
-                while pygame.mixer.music.get_busy():
-                    if self._must_stop(spot):
-                        pygame.mixer.music.stop()
-                        cut = True
-                        break
-                    time.sleep(0.02)
+                self._on_air(True)
+                try:
+                    with self._mlock:
+                        pygame.mixer.music.load(path)
+                        pygame.mixer.music.set_volume(float(self.cfg.get("volume", 0.9)))
+                        pygame.mixer.music.play()
+                    self._started(label)
+                    cut = False
+                    while pygame.mixer.music.get_busy():
+                        if self._must_stop(spot):
+                            pygame.mixer.music.stop()
+                            cut = True
+                            break
+                        time.sleep(0.02)
+                finally:
+                    self._on_air(False)
                 with self._mlock:
                     pygame.mixer.music.unload()
                 self._last_spoke_end = time.monotonic()
@@ -3781,14 +3802,18 @@ class Voice:
             try:
                 self._started("Windows voice (neural voice unreachable)")
                 spot = bool(self._item and self._item[1] == "spot")
-                self._sapi.Speak(text, 1)
-                while not self._sapi.WaitUntilDone(50):
-                    if self._must_stop(spot):
-                        self._sapi.Speak("", 3)
-                        self._last_spoke_end = time.monotonic()
-                        if self._item and self._item[1] == "urgent" and not self._cancelled():
-                            return Voice.SPOT_FIRST
-                        break
+                self._on_air(True)
+                try:
+                    self._sapi.Speak(text, 1)
+                    while not self._sapi.WaitUntilDone(50):
+                        if self._must_stop(spot):
+                            self._sapi.Speak("", 3)
+                            self._last_spoke_end = time.monotonic()
+                            if self._item and self._item[1] == "urgent" and not self._cancelled():
+                                return Voice.SPOT_FIRST
+                            break
+                finally:
+                    self._on_air(False)
                 self._last_spoke_end = time.monotonic()
                 return
             except Exception:
@@ -3958,6 +3983,62 @@ BUTTON_ACTIONS = [("ptt", "Push-to-talk (hold)"), ("repeat", "Repeat last messag
                   ("mute", "Mute / unmute coach"), ("tones", "Braking tones on / off"),
                   ("overlay", "Show / hide overlay"), ("capture", "Start / stop a data capture"),
                   ("sheet", "Show / hide the setup sheet")]
+
+
+SIMCAST_LINK_PORT = 47317                        # localhost only; SimCast listens here (simcast/link.py)
+
+
+class SimCastLink:
+    """Lets SimCast (the TV commentary app) run alongside without talking over the coach. While the coach or crew
+    can be heard (a line or a braking tone), this sends SimCast a tiny "talking" packet on this PC every 100 ms, and
+    "quiet" when it stops; SimCast lowers its booth under the coach and brings it back up after. Nothing leaves the
+    PC, and with SimCast closed the packets simply go nowhere."""
+
+    TALK, QUIET = b"SIMCOACH-VOICE 1 talk", b"SIMCOACH-VOICE 1 quiet"
+    EVERY, HEARTBEAT = 0.1, 2.0
+
+    def __init__(self, voice, port=SIMCAST_LINK_PORT, start=True):
+        self.voice, self.addr = voice, ("127.0.0.1", int(port))
+        self.sock = None
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        except OSError:
+            pass
+        self._was = False
+        self._last = 0.0
+        voice.link = self
+        if start:
+            threading.Thread(target=self._run, daemon=True, name="simcast-link").start()
+
+    def _send(self, msg):
+        self._last = time.monotonic()
+        if self.sock is None:
+            return
+        try:
+            self.sock.sendto(msg, self.addr)
+        except OSError:
+            pass
+
+    def ping(self):
+        """Called the moment a line or tone starts, so SimCast starts lowering before the first word."""
+        self._was = True
+        self._send(self.TALK)
+
+    def step(self):
+        talking = self.voice.audible()
+        if talking:
+            self._send(self.TALK)
+        elif self._was or time.monotonic() - self._last >= self.HEARTBEAT:
+            self._send(self.QUIET)
+        self._was = talking
+
+    def _run(self):
+        while True:
+            time.sleep(self.EVERY)
+            try:
+                self.step()
+            except Exception:
+                pass
 
 
 class Controls:
@@ -13113,6 +13194,8 @@ class App:
         self._style()
 
         self.voice = Voice(cfg, enabled=voice_on, log=self.log)
+        if voice_on:
+            SimCastLink(self.voice)
         self.controls = Controls(cfg, log=self.log)
         self.coach = Coach(cfg, self.voice, self, REF_DIR, log=self.log)
         self.coach.crew = Crew(cfg, self.voice, self, log=self.log, coach=self.coach)
@@ -16350,6 +16433,8 @@ def main():
 
     overlay = NullOverlay() if a.no_overlay else Overlay()
     voice = Voice(cfg, enabled=not a.no_voice, log=file_log)
+    if not a.no_voice:
+        SimCastLink(voice)
     controls = Controls(cfg, log=file_log)
     coach = Coach(cfg, voice, overlay, REF_DIR, log=file_log)
     coach.crew = Crew(cfg, voice, overlay, log=file_log, coach=coach)
