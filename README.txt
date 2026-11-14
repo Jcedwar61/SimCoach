@@ -43,9 +43,9 @@ One-time game settings
   - Assetto Corsa:
     * Weather & live setup link (CSP / Pure / Sol): SimCoach automatically installs a small CSP Lua app
       ("SimCoach Weather Link") into Assetto Corsa's apps\lua folder via Steam. It runs automatically,
-      shares rain, track wetness, puddles, and Pure Planner weather transitions, and applies live setup
-      adjustments clicked in the setup sheet pop-up. (If AC was already open on first install, restart AC
-      once to load it.)
+      shares rain, track wetness, puddles, and Pure Planner weather transitions, and applies the setup
+      changes you tick on the setup sheet to your car. (If AC was already open when SimCoach installed or
+      updated it, restart AC once to load it.)
     * Spotter & gaps: uses the CrewChiefEx Python app (Content Manager > Settings > Assetto Corsa > Python
       apps; SimCoach enables it for you).
   - ACC, AC Rally, LMU, RaceRoom: nothing needed. (RaceRoom cars are named from SimCoach's built-in list of
@@ -63,9 +63,14 @@ What's new (latest updates)
       opens with exact adjustments grouped by area: Fuel, Strategy, Tyres, Brakes, Aero, Suspension,
       Differential, and Electronics.
     * Click any box (the checkbox, setting name, change text, or the Apply badge) to immediately apply that
-      setting in the sim: SimCoach updates the sim's native garage setup file (SimCoach_Race.ini for AC,
-      SimCoach_Race.json for ACC, SimCoach_Race.svm for LMU and rFactor 2, plus a copy in
-      Documents\SimCoach Reports\Setups) and pushes live values over the CSP link in Assetto Corsa.
+      setting in the sim.
+      Assetto Corsa (needs Custom Shaders Patch): the change goes straight onto your car's current setup
+      through the SimCoach Weather Link, and the sheet shows what really changed (e.g. "Rear wing 7 -> 6").
+      In races and qualifying the car must be in the pits; in single-player practice it works anywhere. A
+      box that couldn't be applied unticks itself and says why (not in the pits, the car has no such
+      setting, already set). Unticking puts the car's own value back.
+      Other sims: SimCoach writes the sim's garage setup file (SimCoach_Race.json for ACC, SimCoach_Race.svm
+      for LMU and rFactor 2, plus a copy in Documents\SimCoach Reports\Setups) to load in the garage.
     * Click a ticked box again to revert that specific change back to baseline in the sim, or click
       "Apply all" / "Revert all" in the footer (or say "apply the setup" on the radio) to apply every
       change at once. "Apply all" first lists every value it will change (before -> after) and asks you

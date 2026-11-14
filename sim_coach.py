@@ -68,7 +68,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.11"
+APP_VERSION = "6.11.1"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -1048,8 +1048,8 @@ CSP_WEATHER_APP_DIR = "SimCoachWeather"
 CSP_WEATHER_MANIFEST = r"""[ABOUT]
 NAME = SimCoach Weather Link
 AUTHOR = SimCoach
-VERSION = 1.0
-DESCRIPTION = Shares the CSP / Pure weather (rain, track wetness, puddles, what's coming next) with SimCoach. Runs by itself.
+VERSION = 1.1
+DESCRIPTION = Shares the CSP / Pure weather with SimCoach and applies the setup changes you tick on SimCoach's setup sheet. Runs by itself.
 
 [CORE]
 LAZY = NONE
@@ -1088,13 +1088,179 @@ local LAYOUT = [[
 
 local mem, seq, status = nil, 0, 'Starting...'
 local retryAt = 0
-local setupMem, lastSetupSeq, setupRetryAt = nil, 0, 0
 
 local function num(v, fallback)
   v = tonumber(v)
   if v == nil or v ~= v or v == math.huge or v == -math.huge then return fallback end
   return v
 end
+
+-- Setup link: SimCoach's setup sheet sends changes (SimCoach.CSPSetup.v2), this app applies them to the car's real
+-- setup items and answers with what each one was and became (SimCoach.CSPSetupResult.v1).
+local SETUP_SLOTS = 16
+local CMD_LAYOUT = [[
+  int32_t version;
+  int32_t seq;
+  int32_t count;
+  int32_t kind[16];
+  int32_t op[16];
+  float val[16];
+]]
+local RESULT_LAYOUT = [[
+  int32_t version;
+  int32_t beat;
+  int32_t ackSeq;
+  int32_t flags;
+  int32_t count;
+  int32_t spinners;
+  int32_t status[16];
+  float before[16];
+  float after[16];
+]]
+local cmdMem, resMem, lastSetupSeq, setupRetryAt, beat = nil, nil, 0, 0, 0
+-- kind -> the car's setup item (as in its setup file); 7 = rear wing and 19 = tyre compound are worked out below
+local SETUP_KINDS = { [1] = 'FUEL', [2] = 'PRESSURE_LF', [3] = 'PRESSURE_RF', [4] = 'PRESSURE_LR', [5] = 'PRESSURE_RR',
+  [6] = 'FRONT_BIAS', [8] = 'ARB_FRONT', [9] = 'ARB_REAR', [10] = 'DAMP_BUMP_LF', [11] = 'DAMP_BUMP_RF',
+  [12] = 'DAMP_BUMP_LR', [13] = 'DAMP_BUMP_RR', [14] = 'DIFF_PRELOAD', [15] = 'TRACTION_CONTROL', [16] = 'ABS',
+  [17] = 'ROD_LENGTH_LR', [18] = 'ROD_LENGTH_RR', [20] = 'COMPOUND' }
+
+local function spinnerMap()
+  local out, n = {}, 0
+  if not ac.getSetupSpinners then return out, 0 end
+  local ok, list = pcall(ac.getSetupSpinners)
+  if not ok or type(list) ~= 'table' then return out, 0 end
+  for _, sp in ipairs(list) do
+    if sp and sp.name then out[sp.name] = sp; n = n + 1 end
+  end
+  return out, n
+end
+
+local function findSpinner(map, kind, val)
+  if kind == 7 then                       -- rear wing: the highest-numbered WING_n the car has
+    local best, bestN = nil, -1
+    for name, sp in pairs(map) do
+      local n = tonumber(string.match(name, '^WING_(%d+)$'))
+      if n and n > bestN then best, bestN = sp, n end
+    end
+    return best
+  end
+  if kind == 19 then return map['COMPOUND'] end
+  local name = SETUP_KINDS[kind]
+  return name and map[name] or nil
+end
+
+-- status: 1 changed, 2 this car has no such setting, 3 already there / at its limit, 4 the game refused the change,
+-- 5 changed on the car's live control only (not in the saved setup)
+local function applyOne(map, kind, op, val)
+  local car = ac.getCar(0)
+  local sp = findSpinner(map, kind, val)
+  if sp == nil then
+    if kind == 6 and ac.setBrakeBias and car and car.brakeBias then
+      local before = num(car.brakeBias, 0) * 100
+      local target = (op == 2) and val or (before + val)
+      pcall(ac.setBrakeBias, target / 100)
+      local now = num(ac.getCar(0).brakeBias, 0) * 100
+      if math.abs(now - before) > 0.04 then return 5, before, now end
+      return 4, before, now
+    end
+    if (kind == 15 or kind == 16) and car then
+      local cur = num(kind == 15 and car.tractionControlMode or car.absMode, 0)
+      local top = num(kind == 15 and car.tractionControlModes or car.absModes, 0)
+      if top <= 0 then return 2, 0, 0 end
+      local target = math.max(0, math.min(top, math.floor(((op == 2) and val or (cur + val)) + 0.5)))
+      if target == cur then return 3, cur, cur end
+      local fn = kind == 15 and ac.setTC or ac.setABS
+      if fn then pcall(fn, target) end
+      local c2 = ac.getCar(0)
+      local now = num(kind == 15 and c2.tractionControlMode or c2.absMode, cur)
+      if now ~= cur then return 5, cur, now end
+      return 4, cur, now
+    end
+    return 2, 0, 0
+  end
+  local mult = num(sp.displayMultiplier, 1)
+  if mult == 0 then mult = 1 end
+  local step = math.max(1, num(sp.step, 1))
+  local lo, hi, cur = num(sp.min, 0), num(sp.max, 0), num(sp.value, 0)
+  local target
+  if kind == 19 then                      -- val 1 = wet tyres, 0 = dry: pick by the compound's name
+    target = cur
+    if type(sp.items) == 'table' then
+      for i, label in ipairs(sp.items) do
+        local l = string.lower(tostring(label))
+        local wet = string.find(l, 'wet', 1, true) or string.find(l, 'rain', 1, true) or string.find(l, 'inter', 1, true)
+        if (val >= 0.5 and wet) or (val < 0.5 and not wet) then target = lo + (i - 1) * step; break end
+      end
+    end
+  elseif op == 0 then target = cur + val * step
+  elseif op == 1 then                     -- by an amount: half a step or more moves at least one step that way
+    local n = (val / mult) / step
+    n = (n >= 0) and math.floor(n + 0.5) or -math.floor(-n + 0.5)
+    target = cur + n * step
+  else target = val / mult end
+  target = lo + math.floor((target - lo) / step + 0.5) * step
+  target = math.max(lo, math.min(hi, target))
+  if target == cur then return 3, cur * mult, cur * mult end
+  if physics and physics.awakeCar then pcall(physics.awakeCar, 0) end
+  if not ac.setSetupSpinnerValue then return 4, cur * mult, cur * mult end
+  pcall(ac.setSetupSpinnerValue, sp.name, target)
+  local after = spinnerMap()[sp.name]
+  local now = after and num(after.value, cur) or cur
+  if now == cur then
+    if kind == 6 and ac.setBrakeBias then  -- outside the pits the brake bias can still be moved on the car itself
+      pcall(ac.setBrakeBias, target * mult / 100)
+      local live = num(ac.getCar(0).brakeBias, 0) * 100
+      if math.abs(live - cur * mult) > 0.04 then return 5, cur * mult, live end
+    end
+    if (kind == 15 or kind == 16) then
+      local fn = kind == 15 and ac.setTC or ac.setABS
+      if fn then pcall(fn, target) end
+      local c2 = ac.getCar(0)
+      local live = num(kind == 15 and c2.tractionControlMode or c2.absMode, cur)
+      if live ~= cur then return 5, cur * mult, live * mult end
+    end
+    return 4, cur * mult, cur * mult
+  end
+  return 1, cur * mult, now * mult
+end
+
+local function setupLink(clock)
+  if resMem == nil and clock >= setupRetryAt then
+    local ok, m = pcall(ac.writeMemoryMappedFile, 'SimCoach.CSPSetupResult.v1', RESULT_LAYOUT)
+    if ok and m ~= nil then resMem = m end
+  end
+  if cmdMem == nil and ac.readMemoryMappedFile and clock >= setupRetryAt then
+    local ok, m = pcall(ac.readMemoryMappedFile, 'SimCoach.CSPSetup.v2', CMD_LAYOUT)
+    if ok and m ~= nil then cmdMem = m end
+  end
+  if clock >= setupRetryAt then setupRetryAt = clock + 2 end
+  if resMem == nil then return end
+  beat = beat + 1
+  resMem.version = 1
+  resMem.beat = beat
+  local sim, car = ac.getSim(), ac.getCar(0)
+  local flags = 0
+  if ac.isCarResetAllowed and ac.isCarResetAllowed() then flags = flags + 1 end
+  if car and car.isInPit then flags = flags + 2 end
+  if sim and sim.isOnlineRace then flags = flags + 4 end
+  resMem.flags = flags
+  if cmdMem == nil then return end
+  local seq = cmdMem.seq
+  if cmdMem.version ~= 2 or seq <= 0 or seq % 2 ~= 0 or seq == lastSetupSeq then return end
+  lastSetupSeq = seq
+  local map, n = spinnerMap()
+  local count = math.max(0, math.min(SETUP_SLOTS, cmdMem.count))
+  resMem.spinners = n
+  for i = 0, count - 1 do
+    local ok, st, before, after = pcall(applyOne, map, cmdMem.kind[i], cmdMem.op[i], cmdMem.val[i])
+    if not ok then st, before, after = 4, 0, 0 end
+    resMem.status[i], resMem.before[i], resMem.after[i] = st, num(before, 0), num(after, 0)
+    if st == 1 then map = spinnerMap() end
+  end
+  resMem.count = count
+  resMem.ackSeq = seq
+end
+
 
 local cspVersion = 0
 if ac.getPatchVersionCode then cspVersion = num(ac.getPatchVersionCode(), 0) end
@@ -1142,22 +1308,7 @@ function script.update(dt)
   mem.timeOfDay = num(sim.timeTotalSeconds, 0)
   seq = seq + 1
   mem.seq = seq
-  if setupMem == nil and ac.readMemoryMappedFile and clock >= setupRetryAt then
-    setupRetryAt = clock + 2
-    local ok_s, sm = pcall(ac.readMemoryMappedFile, 'SimCoach.CSPSetup.v1', [[
-      int32_t version; int32_t seq; float fuel; int32_t tyreCompound;
-      float pressLF; float pressRF; float pressLR; float pressRR;
-      float brakeBias; int32_t wing; int32_t arbFront; int32_t arbRear; int32_t tc; int32_t abs;
-    ]])
-    if ok_s and sm ~= nil then setupMem = sm end
-  end
-  if setupMem ~= nil and setupMem.version == 1 and setupMem.seq > 0 and setupMem.seq % 2 == 0 and setupMem.seq ~= lastSetupSeq then
-    lastSetupSeq = setupMem.seq
-    if ac.setBrakeBias then pcall(ac.setBrakeBias, setupMem.brakeBias / 100.0) end
-    if ac.setTC then pcall(ac.setTC, setupMem.tc) end
-    if ac.setABS then pcall(ac.setABS, setupMem.abs) end
-    if physics and physics.setCarFuel then pcall(physics.setCarFuel, 0, setupMem.fuel) end
-  end
+  pcall(setupLink, clock)
 end
 
 local NAMES = { [0] = 'Light thunderstorm', 'Thunderstorm', 'Heavy thunderstorm', 'Light drizzle', 'Drizzle',
@@ -9963,7 +10114,128 @@ def setup_sheet_text(sheet):
     return "\n".join(lines).replace("k p h", "km/h") + "\n"
 
 
-CSP_SETUP_MMF = "Local\\SimCoach.CSPSetup.v1"
+CSP_SETUP_MMF = "Local\\SimCoach.CSPSetup.v2"
+CSP_SETUP_RESULT_MMF = "Local\\SimCoach.CSPSetupResult.v1"
+
+
+class _WinSetupTransport:
+    """Windows shared memory between SimCoach and its Lua helper inside Assetto Corsa (CSP)."""
+    CMD_SIZE = 204
+    _cmd = None
+
+    def write_cmd(self, data: bytes) -> bool:
+        if sys.platform != "win32" or ctypes is None:
+            return False
+        if self._cmd is None:
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CreateFileMappingW.restype = wintypes.HANDLE
+            k32.CreateFileMappingW.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                               wintypes.DWORD, wintypes.LPCWSTR]
+            k32.MapViewOfFile.restype = ctypes.c_void_p
+            k32.MapViewOfFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.c_size_t]
+            h = k32.CreateFileMappingW(wintypes.HANDLE(-1), None, 0x04, 0, self.CMD_SIZE, CSP_SETUP_MMF)
+            ptr = k32.MapViewOfFile(h, 0x0002, 0, 0, self.CMD_SIZE) if h else None
+            if not ptr:
+                return False
+            _WinSetupTransport._cmd = (h, ptr)
+        _h, ptr = self._cmd
+        ctypes.memmove(ptr, data, min(len(data), self.CMD_SIZE))
+        return True
+
+    def read_res(self):
+        m = SharedMem.open(CSP_SETUP_RESULT_MMF)
+        if m is None or m.view is None:
+            return None
+        try:
+            return bytes(m.view[:216])
+        finally:
+            m.close()
+
+    def tick(self):
+        time.sleep(0.02)
+
+
+class CSPSetupLink:
+    """Applies setup changes to the car in Assetto Corsa through SimCoach's helper app inside the game (it's part
+    of the SimCoach Weather Link, which needs Custom Shaders Patch). SimCoach sends up to 16 changes, the helper
+    applies them to the car's real setup items and answers with what each one was and became.
+
+    Kinds (the car's setup item): 1 fuel, 2-5 tyre pressure LF RF LR RR, 6 brake bias, 7 rear wing, 8/9 anti-roll bar
+    front / rear, 10-13 dampers LF RF LR RR, 14 diff preload, 15 traction control, 16 ABS, 17/18 rear ride height
+    (rod length) left / right, 19 tyre compound (value 1 = wet, 0 = dry), 20 tyre compound by index.
+    Ops: 0 = change by clicks, 1 = change by an amount (in the units the game shows), 2 = set to a value.
+    Results: 1 changed, 2 this car has no such setting, 3 already there or at its limit, 4 the game refused it,
+    5 changed on the car's live control only (brake bias, TC or ABS outside the pits)."""
+    transport = _WinSetupTransport()
+    _seq = (int(time.time() * 10) % 50_000_000) * 2
+    LABELS = {1: "Fuel", 2: "Pressure front left", 3: "Pressure front right", 4: "Pressure rear left",
+              5: "Pressure rear right", 6: "Brake bias", 7: "Rear wing", 8: "Front anti-roll bar",
+              9: "Rear anti-roll bar", 10: "Damper front left", 11: "Damper front right", 12: "Damper rear left",
+              13: "Damper rear right", 14: "Diff preload", 15: "Traction control", 16: "ABS",
+              17: "Ride height rear left", 18: "Ride height rear right", 19: "Tyres", 20: "Tyres"}
+    UNITS = {1: " L", 2: " psi", 3: " psi", 4: " psi", 5: " psi", 6: "%"}
+
+    @staticmethod
+    def _parse(raw):
+        if not raw or len(raw) < 216:
+            return None
+        version, beat, ack, flags, count, spinners = struct.unpack_from("<6i", raw, 0)
+        status = struct.unpack_from("<16i", raw, 24)
+        before = struct.unpack_from("<16f", raw, 88)
+        after = struct.unpack_from("<16f", raw, 152)
+        return {"version": version, "beat": beat, "ack": ack, "flags": flags, "count": count, "spinners": spinners,
+                "status": status, "before": before, "after": after}
+
+    @classmethod
+    def state(cls, wait=0.6):
+        """The helper's state when it's running in the game ({"flags", ...}), else None. Running means its
+        heartbeat moves (Assetto Corsa is on and the helper is loaded)."""
+        t = cls.transport
+        first = cls._parse(t.read_res())
+        if first is None or first["version"] != 1:
+            return None
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            t.tick()
+            cur = cls._parse(t.read_res())
+            if cur is None:
+                return None
+            if cur["beat"] != first["beat"]:
+                return cur
+        return None
+
+    @classmethod
+    def send(cls, cmds, timeout=1.5):
+        """Apply [(kind, op, value)] in the game. Returns {"results": [(kind, status, before, after)], "flags"}
+        or None when the helper isn't running (or didn't answer)."""
+        cmds = list(cmds)[:16]
+        if not cmds or cls.state() is None:
+            return None
+        t = cls.transport
+        cls._seq += 2
+        seq = cls._seq
+        kinds = [k for k, _o, _v in cmds] + [0] * (16 - len(cmds))
+        ops = [o for _k, o, _v in cmds] + [0] * (16 - len(cmds))
+        vals = [float(v) for _k, _o, v in cmds] + [0.0] * (16 - len(cmds))
+        body = struct.pack("<16i16i16f", *kinds, *ops, *vals)
+        if not t.write_cmd(struct.pack("<3i", 2, seq - 1, len(cmds)) + body):
+            return None
+        t.write_cmd(struct.pack("<3i", 2, seq, len(cmds)) + body)
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            t.tick()
+            r = cls._parse(t.read_res())
+            if r is not None and r["ack"] == seq:
+                return {"flags": r["flags"],
+                        "results": [(cmds[i][0], r["status"][i], r["before"][i], r["after"][i]) for i in range(len(cmds))]}
+        return None
+
+    @classmethod
+    def fmt(cls, kind, x):
+        if kind in (19, 20):
+            return "wets" if x else "slicks"
+        v = f"{x:.0f}" if abs(x - round(x)) < 0.05 else f"{x:.1f}"
+        return v + cls.UNITS.get(kind, "")
 
 
 class SetupApplier:
@@ -9991,8 +10263,6 @@ class SetupApplier:
         "tc": 3,
         "abs": 3,
     }
-    _csp_map = None
-    _csp_seq = 0
     _IO_LOCK = threading.Lock()
     _WORD_NUMS = (("one", "1"), ("two", "2"), ("three", "3"), ("four", "4"))
 
@@ -10300,43 +10570,6 @@ class SetupApplier:
         )
 
     @classmethod
-    def _push_csp_mmf(cls, st: dict):
-        if sys.platform != "win32" or ctypes is None:
-            return False
-        try:
-            if cls._csp_map is None:
-                k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-                k32.CreateFileMappingW.restype = wintypes.HANDLE
-                k32.CreateFileMappingW.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR]
-                k32.MapViewOfFile.restype = ctypes.c_void_p
-                k32.MapViewOfFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.c_size_t]
-                h = k32.CreateFileMappingW(wintypes.HANDLE(-1), None, 0x04, 0, 64, CSP_SETUP_MMF)
-                if h:
-                    p = k32.MapViewOfFile(h, 0x0002, 0, 0, 64)
-                    if p:
-                        cls._csp_map = (h, p)
-            if cls._csp_map is None:
-                return False
-            _, ptr = cls._csp_map
-            cls._csp_seq += 1
-            odd = cls._csp_seq | 1
-            even = odd + 1
-            cls._csp_seq = even
-            comp = 1 if st["tyre_compound"] == "wet" else 0
-            pr = st["press_psi"]
-            # Same layout as the Lua reader: version, seq, fuel, tyreCompound, 4 pressures, brakeBias, wing,
-            # arbFront, arbRear, tc, abs.
-            payload = struct.pack("<iififffffiiiii", 1, odd, float(st["fuel_load"]), comp,
-                                  float(pr[0]), float(pr[1]), float(pr[2]), float(pr[3]), float(st["brake_bias_pct"]),
-                                  int(st["rear_wing"]), int(st["arb_front"]), int(st["arb_rear"]),
-                                  int(st["tc"]), int(st["abs"]))
-            ctypes.memmove(ptr, payload, len(payload))
-            ctypes.memmove(ptr + 4, struct.pack("<i", even), 4)
-            return True
-        except Exception:
-            return False
-
-    @classmethod
     def _sim_setup_targets(cls, sim: str, track: str, car: str, st: dict) -> list[tuple[str, str]]:
         safe_sim = _RE_SAFE_REPORT.sub("_", sim or "Sim").strip("_")
         safe_trk = _RE_SAFE_REPORT.sub("_", track or "Track").strip("_")
@@ -10358,15 +10591,115 @@ class SetupApplier:
             if os.path.isdir(rf_root):
                 targets.append((os.path.join(rf_root, safe_trk, "SimCoach_Race.svm"), content))
         elif sim in ("AC", "AC Rally", "AC EVO"):
+            # a record only: in Assetto Corsa the changes go onto the car itself (CSPSetupLink); a file written into
+            # its setups folder from SimCoach's own starting values could overwrite the car's real setup if loaded
             content = cls._format_ac_ini(st)
             targets.append((os.path.join(setups_dir, f"{safe_sim}_{safe_trk}_{safe_car}_SimCoach_Race.ini"), content))
-            ac_root = os.path.join(docs, "Assetto Corsa", "setups")
-            if os.path.isdir(ac_root):
-                targets.append((os.path.join(ac_root, safe_car, safe_trk, "SimCoach_Race.ini"), content))
         else:
             content = json.dumps({"sim": sim, "track": track, "car": car, "setup": st}, indent=2) + "\n"
             targets.append((os.path.join(setups_dir, f"{safe_sim}_{safe_trk}_{safe_car}_SimCoach_Race.json"), content))
         return targets
+
+    @staticmethod
+    def live_commands(act: dict) -> list:
+        """The changes a setup-sheet item makes to the car in Assetto Corsa: [(kind, op, value)] for CSPSetupLink.
+        Empty for items that are plans or notes rather than a setting (fuel per lap, pit stops, brake ducts)."""
+        k, op, v = act["key"], act["op"], act["val"]
+        o = 1 if op == "delta" else 2
+        if k == "fuel_load":
+            return [(1, o, float(v))]
+        if k == "tyre_compound":
+            return [(19, 2, 1.0 if v == "wet" else 0.0)]
+        if k.startswith("press_"):
+            wheels = {"press_all": (2, 3, 4, 5), "press_front": (2, 3), "press_rear": (4, 5)}.get(k, ())
+            return [(w, o, float(v)) for w in wheels]
+        if k == "brake_bias_pct":
+            return [(6, o, float(v))]
+        if k == "rear_wing" and int(v):
+            return [(7, 0, int(v))]
+        if k == "rake_mm" and float(v):
+            return [(17, 1, float(v)), (18, 1, float(v))]
+        if k.startswith("arb_") and int(v):
+            return [(x, 0, int(v)) for x in {"arb_front": (8,), "arb_rear": (9,), "arb_both": (8, 9)}[k]]
+        if k.startswith("dampers_") and int(v):
+            return [(x, 0, int(v)) for x in {"dampers_front": (10, 11), "dampers_rear": (12, 13),
+                                               "dampers_both": (10, 11, 12, 13)}[k]]
+        if k == "diff_preload" and int(v):
+            return [(14, 0, int(v))]
+        if k in ("tc", "abs", "tc_abs") and int(v):
+            return [(x, 0, int(v)) for x in {"tc": (15,), "abs": (16,), "tc_abs": (15, 16)}[k]]
+        return []
+
+    _LIVE_WHY = {2: "not on this car", 3: "already set", 4: "the game didn't take it", 5: "live control only"}
+
+    @classmethod
+    def _live_sync(cls, sheet: dict, want: set, log=file_log) -> dict:
+        """Assetto Corsa: apply / revert items on the car through the in-game helper, so the sheet's ticks match
+        what really changed. Returns {"ok", "lines", "changed", "refused", "unticked", "status"}."""
+        items = sheet.get("items") or []
+        live = sheet.setdefault("live", {})
+        cmds, owners = [], []
+        for idx in sorted((i for i in list(live) if i not in want), reverse=True):     # revert: back to before
+            for kind, st, before, _after in live[idx]:
+                if st in (1, 5):
+                    cmds.append((20 if kind == 19 else kind, 2, before))
+                    owners.append(("revert", idx))
+        for idx in sorted(i for i in want if i not in live):
+            area, setting, change = items[idx]
+            for c in cls.live_commands(cls.parse_item(area, setting, change)):
+                cmds.append(c)
+                owners.append(("apply", idx))
+        info = [i for i in want if i not in live and not cls.live_commands(cls.parse_item(*items[i]))]
+        if not cmds:
+            for i in info:
+                live[i] = []
+            return {"ok": True, "lines": [], "changed": 0, "refused": [], "unticked": set(), "status": ""}
+        results, flags = [], 0
+        for start in range(0, len(cmds), 16):
+            r = CSPSetupLink.send(cmds[start:start + 16])
+            if r is None:
+                return {"ok": False, "lines": [], "changed": 0, "refused": [], "unticked": {i for i in want if i not in live},
+                        "status": ("Not applied: SimCoach's helper isn't running in Assetto Corsa. It needs Custom Shaders "
+                                   "Patch, and Assetto Corsa restarted once after SimCoach installed it.")}
+            results += r["results"]
+            flags = r["flags"]
+        per_item, lines, refused = {}, [], []
+        satisfied, already = set(), []
+        for (what, idx), (_k, op, _v), (kind, st, before, after) in zip(owners, cmds, results):
+            if what == "revert":
+                live.pop(idx, None)
+                continue
+            per_item.setdefault(idx, []).append((kind, st, before, after))
+            label = CSPSetupLink.LABELS.get(kind, "Setting")
+            if st in (1, 5):
+                lines.append(f"{label} {CSPSetupLink.fmt(kind, before)} → {CSPSetupLink.fmt(kind, after)}"
+                             + (" (live)" if st == 5 else ""))
+            elif st == 3 and op == 2:              # already at the value asked for: that's applied too
+                satisfied.add(idx)
+                already.append(f"{label} already {CSPSetupLink.fmt(kind, after)}")
+            else:
+                why = "no room (at its limit, or less than one step)" if st == 3 else cls._LIVE_WHY.get(st, "not changed")
+                refused.append(f"{label}: {why}")
+        unticked = set()
+        for idx, res in per_item.items():
+            if any(st in (1, 5) for _k, st, _b, _a in res) or idx in satisfied:
+                live[idx] = res
+            else:
+                unticked.add(idx)
+        for i in info:
+            live[i] = []
+        changed = len(lines)
+        lines += already                           # real changes first
+        status = ""
+        if lines:
+            status = "In Assetto Corsa: " + "; ".join(lines[:3]) + (f"; +{len(lines) - 3} more" if len(lines) > 3 else "")
+        if refused:
+            status = (status + ". " if status else "") + "Not changed: " + "; ".join(refused[:3])
+            if any("didn't take" in x for x in refused) and not flags & 3:
+                status += ". Setup changes go in while you're in the pits (or anywhere in single-player practice)"
+        if log and status:
+            log(f"Setup sheet: {status}")
+        return {"ok": True, "lines": lines, "changed": changed, "refused": refused, "unticked": unticked, "status": status}
 
     @classmethod
     def sync(cls, sheet: dict, coach=None, log=file_log, last_idx: Optional[int] = None) -> dict:
@@ -10406,8 +10739,14 @@ class SetupApplier:
                     os.replace(tmp_p, sheet["path"])
                 except OSError:
                     pass
+        live_res = None
         if sim == "AC":
-            cls._push_csp_mmf(st)
+            live_res = cls._live_sync(sheet, set(applied), log=None)
+            if live_res["unticked"]:
+                applied -= live_res["unticked"]
+                sheet["applied"] = applied
+                st, badges = cls.compute_state(sheet)
+                sheet["applied_state"] = st
         if coach is not None:
             coach.applied_setup = dict(st)
             lf = coach.last_frame
@@ -10433,7 +10772,13 @@ class SetupApplier:
                 log(f"Setup sheet: {status_msg}")
         else:
             status_msg = f"Reverted setup to baseline in {sim}"
-        return {"status": status_msg, "badges": badges, "state": st, "setup_file": saved_path}
+        if live_res is not None:
+            if live_res["status"]:
+                status_msg = live_res["status"]
+            if log and live_res["status"]:
+                log(f"Setup sheet: {live_res['status']}")
+        return {"status": status_msg, "badges": badges, "state": st, "setup_file": saved_path,
+                "live": live_res, "applied": set(applied)}
 
     @classmethod
     def toggle_item(cls, sheet: dict, idx: int, enabled: Optional[bool] = None, coach=None, log=file_log) -> dict:
@@ -10610,8 +10955,20 @@ class Conversation:
             if c.last_setup_sheet:
                 sheet = c.last_setup_sheet
                 changes = SetupApplier.preview(sheet, range(len(sheet.get("items") or [])))
-                SetupApplier.apply_all(sheet, enabled=True, coach=c, log=self.log)
+                res = SetupApplier.apply_all(sheet, enabled=True, coach=c, log=self.log)
                 self.overlay.post(setup_sheet=sheet, setup_popup=not (c.last_frame and c.live() and c.last_frame.speed > 3))
+                live = res.get("live")
+                if live is not None:
+                    if not live["ok"]:
+                        return ("I couldn't change the setup: SimCoach's helper isn't running in Assetto Corsa. It needs "
+                                "Custom Shaders Patch, then restart the game once.")
+                    if not live["lines"]:
+                        return ("Nothing changed on the car. " + ("Get into the pits first, then ask again."
+                                if any("didn't take" in x for x in live["refused"]) else "It's already set that way."))
+                    said = ", ".join(x.replace(" → ", " to ").replace(" psi", " P S I").replace("%", " percent")
+                                     .replace(" L", " litres") for x in live["lines"][:3])
+                    more = f", and {len(live['lines']) - 3} more" if len(live["lines"]) > 3 else ""
+                    return f"Done on the car: {said}{more}."
                 if not changes:
                     return "Setup's already applied, nothing to change."
                 said = ", ".join(f"{lbl.split(' FL/')[0].lower()} {a}" for lbl, _b, a in changes[:3])
@@ -11284,8 +11641,13 @@ class SetupSheetWindow:
         applied = set(self.sheet.get("applied") or ())
         changes = SetupApplier.preview(self.sheet, (applied | {idx}) if done else (applied - {idx}))
         res = SetupApplier.toggle_item(self.sheet, idx, enabled=done)
-        what = "; ".join(f"{lbl} {b} → {a}" for lbl, b, a in changes[:2])
-        self._last_status = (("Applied: " if done else "Reverted: ") + what) if what else res.get("status", "")
+        if res.get("live") is not None:            # Assetto Corsa: the tick shows what really changed on the car
+            self._last_status = res.get("status") or ("Reverted on the car" if not done else "")
+            if done and idx not in res.get("applied", ()):
+                var.set(False)
+        else:
+            what = "; ".join(f"{lbl} {b} → {a}" for lbl, b, a in changes[:2])
+            self._last_status = (("Applied: " if done else "Reverted: ") + what) if what else res.get("status", "")
         self._style_row(item)
         self._update_progress()
 
@@ -11312,7 +11674,15 @@ class SetupSheetWindow:
         listing every value that will change."""
         all_done = bool(self.checks) and all(it[1].get() for it in self.checks)
         target = not all_done
-        if target:
+        if target and self.sheet.get("sim") == "AC":
+            items = self.sheet.get("items") or []
+            listing = "\n".join(f"  {st or a}:  {ch}" for a, st, ch in
+                                (items[it[0]] for it in self.checks if not it[1].get()))
+            if not self._confirm(f"Apply these changes to your car in Assetto Corsa?\n\n{listing}\n\n"
+                                 "They're made to the car's current setup. In a race or qualifying session the car "
+                                 "needs to be in the pits."):
+                return
+        elif target:
             changes = SetupApplier.preview(self.sheet, [it[0] for it in self.checks])
             if not changes:
                 self._last_status = "Nothing to change: these values are already set"
@@ -11322,10 +11692,11 @@ class SetupSheetWindow:
             if not self._confirm(f"Apply {len(changes)} change{'s' if len(changes) != 1 else ''} in the sim?\n\n{listing}\n\n"
                                  "Before values are SimCoach's setup profile, which can differ from your garage setup."):
                 return
-        for it in self.checks:
-            it[1].set(target)
-            self._style_row(it)
         res = SetupApplier.apply_all(self.sheet, enabled=target)
+        done = res.get("applied", set(range(len(self.checks))) if target else set())
+        for it in self.checks:
+            it[1].set(it[0] in done)
+            self._style_row(it)
         self._last_status = res.get("status", "")
         self._update_progress()
 

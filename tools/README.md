@@ -29,6 +29,7 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_reference_library | shared library downloads (local stand-in for GitHub) and the coach flow |
 | test_library_review | GitHub-side checker that adds shared laps (faster / slower / broken / mismatched / non-lap PRs) |
 | test_share_laps | Best laps folder, library fingerprint, GitHub code sign-in, owner commit vs fork + pull request (local stand-in) |
+| test_ac_setup_live | Assetto Corsa setup sheet: runs the in-game helper's real Lua code (needs `pip install lupa`) against a stand-in for CSP: apply, revert, pits rule, missing settings, radio command |
 | test_pace_consistency | pace against the target, consistency score, advice, voice commands, session history, report |
 | test_raceroom | RaceRoom car names and classes, target times there, moving references saved under "car <id>" |
 | test_benchmarks | benchmark lap times by sim / class / car: selection, starter-lap tuning, target announcements, library file |
