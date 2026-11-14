@@ -35,10 +35,12 @@ moment gets bigger; when something big happens, the lead cuts in, the way it doe
 | AC EVO | your car (it doesn't share the others) |
 | EA SPORTS WRC, DiRT Rally 2.0, AC Rally | rally stages: splits against your best run on that stage, moments, damage, the stage time and new bests |
 
-SimCast picks the coverage by itself. *Your car only* means TV-style coverage of your session: places gained
+SimCast **finds the sims installed on your PC** (every Steam library, iRacing, EA app installs) and lists them on
+its start screen, each marked ready or with the one thing still to do. It picks the coverage by itself. *Your car only* means TV-style coverage of your session: places gained
 and lost, the gap to the car ahead closing, pressure from behind, trips off the track, your laps and the finish.
-SimCast also switches on the telemetry EA WRC, DiRT Rally 2.0 and ACC need (backing up what it changes); the
-other one-time game settings are in the built-in guide.
+For the sims you have installed, SimCast switches on what they need (EA WRC, DiRT Rally 2.0 and F1 25 telemetry,
+ACC's broadcasting port, Assetto Corsa's CrewChiefEx app), backing up what it changes. The one setting it can't
+make (Automobilista 2's shared memory) is in the built-in guide.
 
 ### Voices (free, like SimCoach's)
 * **Microsoft neural voices**: natural and quick; the default.
@@ -89,7 +91,8 @@ simcast/director.py          what goes on air, when, and what gets cut off
 simcast/writer.py            the instant lines, in three voices
 simcast/ai.py, providers.py  the AI booth; OpenAI / Gemini / DeepSeek with automatic model choice
 simcast/audio.py             voices (Microsoft, Kokoro, Google, OpenAI), fallback, playback, interruptions
-simcast/gamesetup.py         EA WRC, DiRT Rally 2.0 and ACC telemetry switched on
+simcast/detect.py            the supported sims installed on this PC (Steam libraries, iRacing, EA app)
+simcast/gamesetup.py         EA WRC, DiRT Rally 2.0, F1 25, ACC and Assetto Corsa set up for SimCast
 simcast/gui.py, guide.py     the window, settings, captions window, the guide
 simcast/demo.py              a fictional 12-car race for the demo and the tests
 simcast/licenses/            SimCast's MIT licence and third-party notices

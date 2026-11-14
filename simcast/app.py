@@ -135,6 +135,7 @@ class SimCast:
         self.readers = None
         self.last_frame_t = None
         self.lock = threading.RLock()
+        self.sims = []                     # detect.scan(): the supported sims installed on this PC
         self.errors = deque(maxlen=5)
 
     # -------------------------------------------------------------- settings
@@ -262,12 +263,7 @@ class SimCast:
         next_check = 0.0
         dt = 1.0 / LOOP_HZ
         last = time.monotonic()
-        if self.cfg.get("game_setup", True):
-            try:
-                from .gamesetup import setup_all
-                setup_all(log=self.log)
-            except Exception as e:
-                self._error("Game setup", e)
+        self.scan_sims(setup=True)
         while not stop.is_set():
             now = time.monotonic()
             step, last = now - last, now
@@ -314,6 +310,21 @@ class SimCast:
             if rem > 0:
                 stop.wait(rem)
 
+    def scan_sims(self, setup=False):
+        """Find the supported sims installed here; with setup, switch on what they need (only for those)."""
+        from . import detect
+        try:
+            sims = detect.scan()
+            self.log(detect.summary(sims))
+            if setup and self.cfg.get("game_setup", True) and any(s.found for s in sims):
+                from .gamesetup import setup_all
+                if setup_all(log=self.log, sims=sims):
+                    sims = detect.scan()                   # statuses after the changes
+            self.sims = sims
+        except Exception as e:
+            self._error("Finding sims", e)
+        return self.sims
+
     @staticmethod
     def _safe(fn):
         try:
@@ -349,6 +360,8 @@ class SimCast:
             "ai": self.booth.label() if self.booth else "", "ai_error": self.booth.last_error if self.booth else "",
             "demo": self.demo is not None, "settings": public, "errors": list(self.errors),
             "voice_note": getattr(self.audio, "engine_note", ""),
+            "sims": [{"key": s.key, "name": s.name, "status": s.status, "ok": s.ok, "where": s.where}
+                     for s in self.sims if s.found],
         }
 
 

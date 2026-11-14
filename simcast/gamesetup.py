@@ -5,6 +5,9 @@
   DiRT Rally 2.0    UDP telemetry on, with the extra data (Documents\\My Games\\DiRT Rally 2.0\\hardwaresettings\\
                     hardware_settings_config.xml: <udp enabled="true" extradata="3" port="20777" ...>)
   ACC               the broadcasting port (Documents\\Assetto Corsa Competizione\\Config\\broadcasting.json)
+  F1 25             UDP telemetry on (Documents\\My Games\\F1 25\\hardwaresettings\\hardware_settings_config.xml)
+  Assetto Corsa     the CrewChiefEx Python app on, when CrewChief has installed it (Documents\\Assetto Corsa\\cfg\\
+                    python.ini), for the whole grid
 
 Each file is only touched when the setting is missing or off, and the original is kept next to it as
 *.simcast-backup. A game reads these when it starts, so a game that's running needs a restart afterwards.
@@ -106,12 +109,113 @@ def setup_dirt_rally_2(documents, log=print):
         return False
 
 
-def setup_all(log=print, documents=None):
-    """Every game SimCast can set up; returns the names it changed."""
+def _udp_tag(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            m = _DR2_UDP.search(fh.read())
+        return m.group(0) if m else None
+    except OSError:
+        return None
+
+
+def ea_wrc_on(documents):
+    try:
+        with open(os.path.join(documents, "My Games", "WRC", "telemetry", "config.json"), encoding="utf-8-sig") as fh:
+            cfg = json.load(fh)
+        return any(p.get("port") == WRC_PORT and p.get("bEnabled") for p in cfg.get("udp", {}).get("packets", [])
+                   if isinstance(p, dict))
+    except Exception:
+        return False
+
+
+def dr2_on(documents):
+    tag = _udp_tag(os.path.join(documents, "My Games", "DiRT Rally 2.0", "hardwaresettings",
+                                "hardware_settings_config.xml"))
+    return bool(tag and 'enabled="true"' in tag and 'extradata="3"' in tag)
+
+
+F1_DIR = os.path.join("My Games", "F1 25", "hardwaresettings")
+
+
+def f1_udp_on(documents):
+    """True / False, or None before the game has made its settings file."""
+    tag = _udp_tag(os.path.join(documents, F1_DIR, "hardware_settings_config.xml"))
+    return None if tag is None else 'enabled="true"' in tag
+
+
+def setup_f1_25(documents, log=print):
+    path = os.path.join(documents, F1_DIR, "hardware_settings_config.xml")
+    if f1_udp_on(documents) is not False:
+        return False
+    try:
+        with open(path, encoding="utf-8") as fh:
+            xml = fh.read()
+        tag = _DR2_UDP.search(xml).group(0)
+        new = re.sub(r'enabled="[^"]*"', 'enabled="true"', tag)
+        if 'port="' not in new:
+            new = new.replace("/>", ' port="20777" />')
+        _backup(path)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(xml.replace(tag, new, 1))
+        log("F1 25: UDP telemetry switched on. Restart the game if it's running.")
+        return True
+    except Exception as e:
+        log(f"F1 25: couldn't switch on telemetry ({e})")
+        return False
+
+
+def _ac_python_ini(documents):
+    return os.path.join(documents, "Assetto Corsa", "cfg", "python.ini")
+
+
+def crewchiefex_active(documents):
+    try:
+        with open(_ac_python_ini(documents), encoding="utf-8", errors="ignore") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    m = re.search(r"^\[CREWCHIEFEX\]\s*$(.*?)(?=^\[|\Z)", text, re.M | re.S | re.I)
+    return bool(m and re.search(r"^[ \t]*ACTIVE[ \t]*=[ \t]*1[ \t]*$", m.group(1), re.M))
+
+
+def setup_crewchiefex(documents, ac_dir, log=print):
+    """Assetto Corsa: switch on the CrewChiefEx Python app (it shares every car), if CrewChief installed it."""
+    if not ac_dir or not os.path.isdir(os.path.join(ac_dir, "apps", "python", "CrewChiefEx")):
+        return False
+    if crewchiefex_active(documents):
+        return False
+    path = _ac_python_ini(documents)
+    if not os.path.isdir(os.path.dirname(path)):
+        return False
+    try:
+        text = open(path, encoding="utf-8", errors="ignore").read() if os.path.exists(path) else ""
+        m = re.search(r"^\[CREWCHIEFEX\]\s*$(.*?)(?=^\[|\Z)", text, re.M | re.S | re.I)
+        if m:
+            body = m.group(1)
+            body = re.sub(r"^[ \t]*ACTIVE[ \t]*=.*$", "ACTIVE=1", body, flags=re.M) \
+                if re.search(r"^[ \t]*ACTIVE[ \t]*=", body, re.M) \
+                else "\nACTIVE=1" + body
+            text = text[:m.start(1)] + body + text[m.end(1):]
+        else:
+            text = text.rstrip("\n") + ("\n\n" if text.strip() else "") + "[CREWCHIEFEX]\nACTIVE=1\n"
+        _backup(path)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        log("Assetto Corsa: switched on the CrewChiefEx app (the whole grid). Restart AC if it's running.")
+        return True
+    except Exception as e:
+        log(f"Assetto Corsa: couldn't switch on CrewChiefEx ({e})")
+        return False
+
+
+def setup_all(log=print, documents=None, sims=None):
+    """Every game SimCast can set up; returns the names it changed. sims: detect.scan() (for AC's folder)."""
     documents = documents or _documents_dir()
+    ac = next((s for s in (sims or []) if s.key == "ac" and s.found), None)
     done = []
-    for name, fn in (("EA WRC", setup_ea_wrc), ("DiRT Rally 2.0", setup_dirt_rally_2),
-                     ("ACC", lambda d, log: acc_broadcast.ensure_config(d, log=log))):
+    for name, fn in (("EA WRC", setup_ea_wrc), ("DiRT Rally 2.0", setup_dirt_rally_2), ("F1 25", setup_f1_25),
+                     ("ACC", lambda d, log: acc_broadcast.ensure_config(d, log=log)),
+                     ("Assetto Corsa", lambda d, log: setup_crewchiefex(d, ac.extra.get("dir") if ac else "", log=log))):
         try:
             if fn(documents, log=log):
                 done.append(name)

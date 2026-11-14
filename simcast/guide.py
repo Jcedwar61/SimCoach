@@ -36,22 +36,26 @@ SimCast picks the right one by itself and shows it at the top of the window.
 Gaps are measured at 40 timing points a lap, like a TV timing system. A place lost in the pits, to a stopped car or through lapped traffic isn't called an overtake. Stale stories are dropped: if three things happen at once, the biggest one is called and the others are summed up.
 """),
     ("Setting up your sim", """
+## SimCast finds your sims
+When it starts, SimCast looks for the supported sims installed on this PC (every Steam library, iRacing's own folder, and EA app installs of F1 25 and EA SPORTS WRC) and lists them on the start screen and in Settings > Sims: a green tick when a sim is ready, or the one thing still to do. Press Scan again in Settings > Sims after installing a sim.
+
 ## Nothing to do
 - Le Mans Ultimate, rFactor 2, RaceRoom, AC Rally, AC EVO: just drive.
 - iRacing: just drive (iRacing shares every car's position and lap times).
 
 ## Set once in the game
 - Automobilista 2: Options > System > Shared Memory = "Project CARS 2".
-- F1 25: Settings > Telemetry Settings: UDP Telemetry On, port 20777, UDP Format 2025. F1 also sends its own events (collisions, penalties, safety car), which SimCast commentates.
 
 ## SimCast sets these up for you
 - ACC: SimCast switches on ACC's broadcasting port (in Documents\\Assetto Corsa Competizione\\Config\\broadcasting.json) to see the whole grid. If ACC was running when this happened, restart ACC once.
 - EA SPORTS WRC: SimCast adds its telemetry packet to the game's telemetry settings (Documents\\My Games\\WRC\\telemetry). Restart the game once if it was running.
 - DiRT Rally 2.0: SimCast switches on UDP telemetry with the extra data (hardware_settings_config.xml). Restart the game once if it was running.
+- F1 25: SimCast switches on UDP telemetry (port 20777) once the game has been started once. F1 also sends its own events (collisions, penalties, safety car), which SimCast commentates. In online races, the game's "Your Telemetry" and "Show online names" settings decide what other players' cars show.
+- Assetto Corsa: SimCast switches on the CrewChiefEx app when CrewChief has installed it (see below).
 Anything SimCast changes is backed up next to the original as .simcast-backup. Switch this off in Settings > Sims.
 
 ## Assetto Corsa
-To see the other cars, switch on the CrewChiefEx Python app: Content Manager > Settings > Assetto Corsa > Python apps (it comes with CrewChief). Without it, SimCast covers your car only.
+To see the other cars, SimCast uses the CrewChiefEx Python app, which comes with CrewChief. When it's installed, SimCast switches it on for you; you can also do it in Content Manager > Settings > Assetto Corsa > Python apps. Without it, SimCast covers your car only.
 
 ## SimHub and SimCoach
 SimCast can run next to SimHub and SimCoach. On UDP port 20777 (F1 25, DiRT Rally 2.0) it shares the port when SimHub listens on all addresses, and it also listens on 20778 (F1) and 20779 (DiRT Rally 2.0) as a fallback.
@@ -151,12 +155,13 @@ F1 25, EA WRC and DiRT Rally 2.0 send UDP, which works between any prefix; the l
 - On air must be on (the button at the top).
 
 ## "Waiting for a sim"
+- The start screen lists the sims SimCast found and what each still needs.
 - The game must be running and in a session (not the menus).
 - Automobilista 2 needs Shared Memory = Project CARS 2; F1 25 needs UDP telemetry on.
 - EA WRC, DiRT Rally 2.0 and ACC: restart the game once after SimCast first set it up.
 
 ## Only my car is covered
-- Assetto Corsa: switch on the CrewChiefEx Python app.
+- Assetto Corsa: install CrewChief (for its CrewChiefEx app); SimCast switches the app on. Restart AC once.
 - ACC: restart ACC once after SimCast switched on its broadcasting port.
 - AC EVO shares only your car.
 

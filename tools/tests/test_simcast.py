@@ -437,5 +437,42 @@ lic = os.path.join(REPO, "simcast", "licenses")
 notice = open(os.path.join(lic, "THIRD_PARTY_NOTICES.txt")).read()
 check("MIT License" in open(os.path.join(lic, "LICENSE.txt")).read() and "The Go Authors" in notice and
       all(n in notice for n in ("kokoro-onnx", "ONNX Runtime", "gTTS", "uv ")), "licences: SimCast MIT and the notices")
+
+# ---------------------------------------------------------------- installed sims, found without starting them
+from simcast import detect  # noqa: E402
+pc = tempfile.mkdtemp()
+steam, lib2, docs2 = os.path.join(pc, "Steam"), os.path.join(pc, "Games", "SteamLibrary"), os.path.join(pc, "Docs")
+for d in (os.path.join(steam, "steamapps", "common"), os.path.join(lib2, "steamapps", "common"), docs2):
+    os.makedirs(d, exist_ok=True)
+open(os.path.join(steam, "steamapps", "libraryfolders.vdf"), "w").write(
+    '"libraryfolders"\n{\n "0"\n {\n  "path"  "%s"\n }\n "1"\n {\n  "path"  "%s"\n }\n}\n'
+    % (steam.replace("\\", "\\\\"), lib2.replace("\\", "\\\\")))
+for lib, appid in ((steam, 805550), (lib2, 2399420)):
+    open(os.path.join(lib, "steamapps", f"appmanifest_{appid}.acf"), "w").write('"AppState" { }')
+os.makedirs(os.path.join(lib2, "steamapps", "common", "assettocorsa", "apps", "python", "CrewChiefEx"))
+os.makedirs(os.path.join(docs2, "Assetto Corsa", "cfg"))
+open(os.path.join(docs2, "Assetto Corsa", "cfg", "python.ini"), "w").write("[HELICORSA]\nACTIVE=1\n\n[CREWCHIEFEX]\nACTIVE=0\n")
+f1dir = os.path.join(docs2, "My Games", "F1 25", "hardwaresettings")
+os.makedirs(f1dir)
+open(os.path.join(f1dir, "hardware_settings_config.xml"), "w").write(
+    '<hardware_settings_config>\n <motion>\n  <udp enabled="false" broadcast="false" ip="127.0.0.1" port="20777" '
+    'sendRate="20" format="2025" yourTelemetry="restricted" />\n </motion>\n</hardware_settings_config>\n')
+libs = detect.steam_libraries([steam])
+check(len(libs) == 2, f"sims found: both Steam libraries from libraryfolders.vdf ({libs})")
+found = {x.key: x for x in detect.scan(libraries=libs, documents=docs2) if x.found}
+check(set(found) == {"acc", "lmu", "ac", "f1"}, f"sims found: by app id, install folder and settings folder ({sorted(found)})")
+check(not found["ac"].ok and "CrewChiefEx" in found["ac"].status, "sims found: AC says the CrewChiefEx app is off")
+check(not found["f1"].ok and "UDP" in found["f1"].status, "sims found: F1 25 says its UDP telemetry is off")
+check(found["lmu"].ok and "whole field" in found["lmu"].status, "sims found: Le Mans Ultimate is ready")
+did = gamesetup.setup_all(log=lambda m: None, documents=docs2, sims=list(found.values()))
+check(set(did) == {"F1 25", "Assetto Corsa"}, f"sims set up: only what's installed and needs it ({did})")
+again = {x.key: x for x in detect.scan(libraries=libs, documents=docs2) if x.found}
+check(again["ac"].ok and again["f1"].ok and again["acc"].ok,
+      f"sims set up: AC, F1 25 and ACC ready after setup ({[(k, x.status) for k, x in again.items() if not x.ok]})")
+ini = open(os.path.join(docs2, "Assetto Corsa", "cfg", "python.ini")).read()
+check("[HELICORSA]\nACTIVE=1" in ini and "[CREWCHIEFEX]\nACTIVE=1\n" in ini, "sims set up: CrewChiefEx on, other AC apps untouched")
+check('udp enabled="true"' in open(os.path.join(f1dir, "hardware_settings_config.xml")).read() and
+      'format="2025"' in open(os.path.join(f1dir, "hardware_settings_config.xml")).read(), "sims set up: F1 25 UDP on, format kept")
+check("Found 4" in detect.summary(list(found.values())), "sims found: a summary for the log")
 check(os.path.exists(os.path.join(REPO, "SimCast.ico")), "SimCast.ico in the repo")
 done()

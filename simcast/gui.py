@@ -303,6 +303,11 @@ class SimCastWindow:
                   ).grid(row=1, column=1, sticky="w", pady=(8, 14))
         ttk.Button(self.hero, text="▶  Start a demo race", style="Accent.TButton",
                    command=self.toggle_demo).grid(row=2, column=1, sticky="nw")
+        ttk.Label(self.hero, text="S I M S   O N   T H I S   P C", style="CardMut.TLabel").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(26, 6))
+        self.sims_box = ttk.Frame(self.hero, style="Card.TFrame")
+        self.sims_box.grid(row=4, column=0, columnspan=2, sticky="w")
+        self._sims_shown = None
 
         foot = ttk.Frame(r, padding=(16, 0, 16, 10))
         foot.grid(row=2, column=0, sticky="ew")
@@ -369,6 +374,7 @@ class SimCastWindow:
         self.air_btn.configure(text="●  On air" if S["on_air"] else "○  Off air",
                                style="OnAir.TButton" if S["on_air"] else "OffAir.TButton")
         self._show_idle(not S["source"] and not demo)
+        self._render_sims(S.get("sims") or [])
 
         rows = S["standings"]
         kids = self.tree.get_children()
@@ -424,6 +430,13 @@ class SimCastWindow:
         if S["errors"]:
             bits.append(S["errors"][-1])
         self.foot.configure(text="   ·   ".join(bits))
+
+    def _render_sims(self, sims):
+        key = tuple((s["name"], s["status"], s["ok"]) for s in sims)
+        if key == self._sims_shown:
+            return
+        self._sims_shown = key
+        sims_list(self.sims_box, sims, self.f)
 
     # ------------------------------------------------------------------ actions
     def toggle_demo(self):
@@ -657,12 +670,21 @@ class SettingsWindow:
 
         # ---------------------------------------------------------------- Sims
         f = page("Sims")
-        self.row(f, 0, "Game setup", self.check(f, "game_setup", "Set up EA WRC, DiRT Rally 2.0 and ACC automatically", cfg))
-        self.note(f, 1, "Switches on the data these games send (backing up what it changes). Restart a game once "
-                        "after it's been set up.")
+        self.row(f, 0, "Game setup", self.check(f, "game_setup", "Switch on what installed sims need, automatically", cfg))
+        self.note(f, 1, "EA WRC, DiRT Rally 2.0 and F1 25 telemetry, ACC's broadcasting port and Assetto Corsa's "
+                        "CrewChiefEx app (backing up what it changes). Restart a game once after it's been set up.")
         self.row(f, 2, "F1 25 port", self.entry(f, "f1_port", cfg, width=8), sticky="w")
         self.row(f, 3, "SimHub", self.check(f, "udp_share_simhub", "Share UDP port 20777 with SimHub", cfg))
-        self.note(f, 4, "Whole field: Le Mans Ultimate, rFactor 2, iRacing, Automobilista 2, RaceRoom, F1 25, ACC, "
+        box = ttk.Frame(f, style="Card.TFrame")
+        box.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        sims_list(box, cast.state().get("sims") or [], self.f, wrap=480)
+
+        def rescan():
+            cast.scan_sims(setup=False)
+            sims_list(box, cast.state().get("sims") or [], self.f, wrap=480)
+        ttk.Button(f, text="Scan again", style="Small.TButton", command=rescan).grid(row=6, column=0, sticky="w",
+                                                                                   pady=(4, 8))
+        self.note(f, 7, "Whole field: Le Mans Ultimate, rFactor 2, iRacing, Automobilista 2, RaceRoom, F1 25, ACC, "
                         "Assetto Corsa (with the CrewChiefEx app). Your car only: AC EVO, Assetto Corsa without "
                         "CrewChiefEx. Rally stages: EA SPORTS WRC, DiRT Rally 2.0, AC Rally. The Guide has the "
                         "one-time game settings.", span=3)
@@ -863,6 +885,22 @@ class GuideWindow:
                 t.insert("end", f"({name} is missing from this installation)\n", "mono")
         t.insert("end", "Full licence texts referred to above (LGPL-3.0, GPL-3.0) are in the licenses folder of the "
                         "SimCast installation.\n")
+
+
+def sims_list(box, sims, f, wrap=620):
+    """The installed sims, one per line: a green tick when ready, amber when there's something to do."""
+    for w in box.winfo_children():
+        w.destroy()
+    if not sims:
+        ttk.Label(box, text="None found yet. SimCast still goes on air as soon as a supported sim is running.",
+                  style="Card.TLabel", foreground=P["mut"]).grid(row=0, column=0, sticky="w")
+        return
+    for i, s in enumerate(sims):
+        ttk.Label(box, text="✓" if s["ok"] else "!", style="Card.TLabel", width=2, font=f["uib"],
+                  foreground=P["green"] if s["ok"] else P["amber"]).grid(row=i, column=0, sticky="nw")
+        ttk.Label(box, text=s["name"], style="Card.TLabel", font=f["uib"], width=26).grid(row=i, column=1, sticky="nw")
+        ttk.Label(box, text=s["status"], style="Card.TLabel", foreground=P["mut"], wraplength=wrap,
+                  justify="left").grid(row=i, column=2, sticky="nw", pady=1)
 
 
 def _open_path(path):

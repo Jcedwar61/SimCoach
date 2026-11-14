@@ -2,6 +2,7 @@
 fills the timing tower and the booth, Settings opens and saves, the captions window follows the booth, and the
 off-air card comes back when the demo stops. SIMCAST_SHOTS=folder saves screenshots."""
 import os
+import re
 import sys
 import time
 
@@ -15,7 +16,14 @@ from simcast.app import DEFAULTS, SimCast   # noqa: E402
 from simcast.gui import SimCastWindow       # noqa: E402
 
 SHOTS = os.environ.get("SIMCAST_SHOTS")
-cfg = dict(DEFAULTS, tts="off", driver_name="Sam Carter", game_setup=False)
+from simcast import detect  # noqa: E402
+_fake = detect.catalogue()
+for _s, _st, _ok in ((_fake[1], "Ready: whole field (broadcasting on)", True), (_fake[4], "Ready: whole field", True),
+                     (_fake[0], "Switch on the CrewChiefEx app in Content Manager (Settings > Python apps) for the whole grid.", False),
+                     (_fake[10], "Ready: rally stages", True)):
+    _s.found, _s.status, _s.ok, _s.where = True, _st, _ok, "Steam"
+detect.scan = lambda *a, **k: _fake                  # a PC with four sims installed
+cfg = dict(DEFAULTS, tts="off", driver_name="Sam Carter", game_setup=False, guide_seen=True)
 cast = SimCast(cfg, log=lambda m: None, booth=False, save=False)
 win = SimCastWindow(cast)
 root = win.root
@@ -45,6 +53,9 @@ win.loop.start()
 root.after(50, win.poll)
 pump(1.5)
 check(win.hero.winfo_ismapped() and not win.body.winfo_ismapped(), "off air: the waiting card shows")
+names = [w.cget("text") for w in win.sims_box.winfo_children()]
+check("Assetto Corsa Competizione" in names and "EA SPORTS WRC" in names and "!" in names,
+      "off air: the installed sims are listed, with what's still to do")
 shot("simcast-offair.png")
 
 win.toggle_demo()
@@ -53,7 +64,7 @@ rows = win.tree.get_children()
 check(len(rows) == 12, f"demo: the timing tower lists the field ({len(rows)})")
 check(win.body.winfo_ismapped() and not win.hero.winfo_ismapped(), "demo: tower and booth replace the card")
 booth = win.text.get("1.0", "end")
-check("BEN" in booth and ("away" in booth or "Lights out" in booth or "green flag" in booth.lower()),
+check("BEN" in booth and re.search(r"away|lights out|green flag", booth, re.I),
       "demo: the booth's lines appear, with who said them")
 me = [r for r in rows if "me" in win.tree.item(r, "tags")]
 check(len(me) == 1 and "Carter" in win.tree.item(me[0], "values")[1], "demo: your car is highlighted")
