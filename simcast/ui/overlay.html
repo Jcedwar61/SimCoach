@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimCast overlay</title>
+<style>
+:root { --cyan: #2ee0f5; --red: #ff3347; --amber: #ff8c2b; --purple: #b46cff; --ink: #f4f7fb; }
+html, body { margin: 0; background: transparent; color: var(--ink); overflow: hidden;
+  font: 600 16px/1.3 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+.tower { position: fixed; top: 24px; left: 24px; width: 250px; background: rgba(8, 10, 15, .86);
+  border-radius: 10px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+.head { display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  background: linear-gradient(90deg, #d81f33, #8c1222); font-weight: 800; letter-spacing: .5px; }
+.head img { width: 28px; height: 28px; border-radius: 6px; }
+.head .lap { margin-left: auto; font-size: 14px; }
+ol { list-style: none; margin: 0; padding: 3px 0; }
+li { display: grid; grid-template-columns: 26px 3px 1fr auto; gap: 7px; align-items: center; padding: 3px 10px;
+  font-variant-numeric: tabular-nums; font-size: 15px; }
+li .p { text-align: right; opacity: .75; }
+li .bar { height: 14px; background: #555e6d; }
+li.me { background: linear-gradient(90deg, rgba(46,224,245,.28), transparent); }
+li.me .bar { background: var(--cyan); }
+li .g { font-size: 13px; opacity: .8; }
+li.battle .g { color: var(--amber); opacity: 1; }
+.t { font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 3px; margin-left: 5px; }
+.t.pit { background: #fff; color: #000; } .t.fl { background: var(--purple); }
+.cap { position: fixed; left: 50%; bottom: 46px; transform: translateX(-50%); max-width: min(1100px, 86vw);
+  background: rgba(8, 10, 15, .88); border-left: 5px solid var(--cyan); border-radius: 8px; padding: 10px 18px;
+  font-size: 22px; font-weight: 600; transition: opacity .4s; box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+.cap.analyst { border-left-color: var(--red); } .cap.pit { border-left-color: #fff; }
+.cap b { display: block; font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase; opacity: .7; margin-bottom: 2px; }
+.cap.hide { opacity: 0; }
+</style>
+</head>
+<body>
+<div class="tower" id="tw" hidden>
+  <div class="head"><img src="/assets/helmet-128.png" alt=""><span>SimCast</span><span class="lap" id="lap"></span></div>
+  <ol id="list"></ol>
+</div>
+<div class="cap hide" id="cap"></div>
+<script>
+const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const q = new URLSearchParams(location.search);
+const MAX = parseInt(q.get("rows") || "12", 10);
+let lastT = 0, hideAt = 0;
+async function poll() {
+  let S;
+  try { S = await (await fetch("/state.json", {cache: "no-store"})).json(); } catch (e) { return; }
+  const tw = document.getElementById("tw");
+  tw.hidden = !S.standings.length || q.get("tower") === "0";
+  document.getElementById("lap").textContent = S.finished ? "🏁" : S.lap ? `LAP ${S.lap}${S.laps ? "/" + S.laps : ""}` : "";
+  let rows = S.standings;
+  if (rows.length > MAX) {
+    const me = rows.findIndex(r => r.player);
+    rows = rows.slice(0, MAX - 3).concat(me >= MAX - 3 ? rows.slice(Math.max(MAX - 3, me - 1), me + 2) : rows.slice(MAX - 3, MAX));
+  }
+  document.getElementById("list").innerHTML = rows.map((s, i) => {
+    const g = s.pos === 1 ? "" : S.session !== "race" ? (s.gap != null ? "+" + s.gap.toFixed(3) : "") :
+      s.status === "dnf" ? "OUT" : s.interval != null ? "+" + s.interval.toFixed(1) : s.laps_down ? "+" + s.laps_down + "L" : "";
+    const t = (s.in_pit ? '<span class="t pit">PIT</span>' : "") + (s.fastest ? '<span class="t fl">FL</span>' : "");
+    return `<li class="${s.player ? "me" : ""} ${s.battle ? "battle" : ""}"><span class="p">${s.pos}</span>
+      <span class="bar"></span><span>${esc(s.call)}${t}</span><span class="g">${g}</span></li>`;
+  }).join("");
+  const cap = document.getElementById("cap");
+  const l = S.lines.length ? S.lines[S.lines.length - 1] : null;
+  if (q.get("captions") !== "0" && l && l.t > lastT) {
+    lastT = l.t;
+    cap.className = "cap " + l.who;
+    cap.innerHTML = `<b>${esc(l.name)}</b>${esc(l.text)}`;
+    hideAt = Date.now() + 1500 + l.text.split(" ").length * 380;
+  } else if (Date.now() > hideAt && !S.speaking) {
+    cap.classList.add("hide");
+  }
+}
+poll();
+setInterval(poll, 400);
+</script>
+</body>
+</html>

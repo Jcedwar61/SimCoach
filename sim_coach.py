@@ -515,6 +515,22 @@ class Frame:
     energy: Optional[float] = None
     energy_lap: Optional[float] = None
     track_limits: Optional[int] = None
+    field: Optional[list] = None          # every car in the session: see field_entry()
+    sim_events: Optional[list] = None     # race events the sim itself reports (F1: overtakes, fastest lap, ...)
+
+
+def field_entry(cid, name, car, position, laps, pct, in_pit=False, last=None, best=None, status=None, pits=None,
+                player=False, speed=None, cls=None):
+    """One car of Frame.field, the whole grid, for SimCast's commentary. Times in seconds (None when the sim doesn't
+    say or the value isn't believable), pct is the fraction of the current lap, laps the laps completed, status one of
+    None/'running', 'finished', 'dnf', 'dsq'. Kept small and plain so a capture or a test can build one by hand."""
+    def t(x):
+        return float(x) if x is not None and 10.0 < x < 3600.0 else None
+    return {"id": cid, "name": (name or "").strip() or f"Car {cid}", "car": car or "", "cls": cls or "",
+            "position": max(0, int(position or 0)), "laps": max(0, int(laps or 0)),
+            "pct": float(pct) % 1.0 if pct is not None and pct == pct else 0.0, "in_pit": bool(in_pit),
+            "last": t(last), "best": t(best), "status": status, "pits": pits, "player": bool(player),
+            "speed": float(speed) if speed is not None and 0.0 <= speed < 600.0 else None}
 
 
 class Reader:
@@ -898,6 +914,12 @@ class ACReader(Reader):
         if mine is None:
             return
         mx, _my, mz = fr.pos = mine[1]
+        # Whole grid (speedMS @132, bestLapMS @136, lastLapMS @152, isCarInPitline @168).
+        fr.field = [field_entry(c[0], _cstr(blk, c[5] + 4, 64), nice_name(_cstr(blk, c[5] + 68, 64)), c[3] + 1,
+                                _i(blk, c[5] + 140), _f(blk, c[5] + 184), bool(c[4] or _i(blk, c[5] + 168)),
+                                _i(blk, c[5] + 152) / 1000.0, _i(blk, c[5] + 136) / 1000.0, player=c[0] == me,
+                                speed=_f(blk, c[5] + 132) * 3.6)
+                    for c in cars if c[3] >= 0]
         others_pos, others_meta = [], []
         for c in cars:
             if c[0] != me and not c[4]:
@@ -1922,6 +1944,7 @@ class _RF2Family(Reader):
             fr.precip = rain
         mx, _my, mz = fr.pos = _U_3d(tel, 160)
         me = _i(tel, 0)
+        fr.field = _RF2Family._field(vehicles, lap_len, me)
         v_by_id = None
         others_pos, others_meta = [], []
         for t in telems:
@@ -1942,6 +1965,21 @@ class _RF2Family(Reader):
         if others_meta:
             fr.others_meta = others_meta
         return fr
+
+    @staticmethod
+    def _field(vehicles, lap_len, me):
+        """Every car from VehicleScoringInfoV01: mID @0, mDriverName @4, mVehicleName @36, mTotalLaps @100,
+        mFinishStatus @103 (0 none, 1 finished, 2 DNF, 3 DQ), mLapDist @104, mBestLapTime @144, mLastLapTime @168,
+        mNumPitstops @192, mInPits @198, mPlace @199, mVehicleClass @200."""
+        out = []
+        for v in vehicles:
+            vid = _i(v, 0)
+            fin = _U_b(v, 103)[0]
+            out.append(field_entry(vid, _cstr(v, 4, 32), nice_name(_cstr(v, 36, 64)), _U_b(v, 199)[0],
+                                   _U_h(v, 100)[0], _d(v, 104) / lap_len if lap_len > 0 else 0.0, bool(v[198]),
+                                   _d(v, 168), _d(v, 144), {1: "finished", 2: "dnf", 3: "dsq"}.get(fin),
+                                   _U_h(v, 192)[0], player=vid == me, cls=_cstr(v, 200, 32)))
+        return out
 
     def _paused(self, tel):
         """True when the telemetry clock (TelemInfoV01.mElapsedTime) hasn't moved for half a second: the game is
@@ -2287,6 +2325,7 @@ class AMS2Reader(Reader):
         fr.pos = _U_3f(b, pb + 68)
         my_lap_d = _f(b, pb + 80)
         tlen = tl if tl > 500 else 4000.0
+        fr.field = _ams2_field(b, n, idx, tlen)
         others_pos, others_meta = [], []
         for k in range(n):
             ob = 28 + k * 100
@@ -2322,6 +2361,25 @@ class AMS2Reader(Reader):
             fr.others_meta = others_meta
         return fr
 
+
+
+def _ams2_field(b, n, idx, tlen):
+    """Every active participant (ParticipantInfo, 100 bytes from @28: mIsActive @0, mName @1, mCurrentLapDistance
+    @80, mRacePosition @84, mLapsCompleted @88) plus the per-car arrays of SharedMemory.h v2: mFastestLapTimes @8944,
+    mLastLapTimes @9200, mRaceStates @9520 (3 finished, 4 DQ, 5 retired, 6 DNF), mPitModes @9776 (1-5: pit lane or
+    garage), mSpeeds @10800 (m/s), mCarNames @11056, mCarClassNames @15152."""
+    out = []
+    for k in range(n):
+        ob = 28 + k * 100
+        if not b[ob]:
+            continue
+        st = _U_I(b, 9520 + 4 * k)[0]
+        out.append(field_entry(k, _cstr(b, ob + 1, 64), nice_name(_cstr(b, 11056 + k * 64, 64)),
+                               _U_I(b, ob + 84)[0], _U_I(b, ob + 88)[0], _f(b, ob + 80) / tlen,
+                               1 <= _U_I(b, 9776 + 4 * k)[0] <= 5, _f(b, 9200 + 4 * k), _f(b, 8944 + 4 * k),
+                               {3: "finished", 4: "dsq", 5: "dnf", 6: "dnf"}.get(st), player=k == idx,
+                               speed=_f(b, 10800 + 4 * k) * 3.6, cls=_cstr(b, 15152 + k * 64, 64)))
+    return out
 
 
 class R3EReader(Reader):
@@ -2392,6 +2450,7 @@ class R3EReader(Reader):
         fr.pos = _U_3d(b, 56)
         tlen = tl if tl > 500 else 4000.0
         my_d = fr.pct * tlen
+        fr.field = _r3e_field(b, n, me, tlen)
         others_pos, others_meta = [], []
         for k in range(n):
             ob = 2012 + k * 328
@@ -2425,6 +2484,24 @@ class R3EReader(Reader):
             fr.others_meta = others_meta
         return fr
 
+
+
+def _r3e_field(b, n, me, tlen):
+    """Every car (DriverData, 328 bytes from @2012, r3e.h): name @0, model_id @72, finish_status @128 (1 finished,
+    2 DNF, 5 DQ), place @132, lap_distance @140, completed_laps @164, sector_time_previous_self[2] @196 (last lap),
+    sector_time_best_self[2] @208 (best lap), in_pitlane @224, num_pitstops @228, car_speed @252 (m/s)."""
+    out = []
+    for k in range(n):
+        ob = 2012 + k * 328
+        plc = _i(b, ob + 132)
+        if plc <= 0:
+            continue
+        car = raceroom_car(_i(b, ob + 72))
+        out.append(field_entry(_i(b, ob + 92) or k, _cstr(b, ob, 64), car, plc, _i(b, ob + 164),
+                               _f(b, ob + 140) / tlen, _i(b, ob + 224) > 0, _f(b, ob + 196), _f(b, ob + 208),
+                               {1: "finished", 2: "dnf", 5: "dsq"}.get(_i(b, ob + 128)), _i(b, ob + 228),
+                               player=plc == me, speed=_f(b, ob + 252) * 3.6, cls=raceroom_class(car)))
+    return out
 
 
 IRSDK_MMF = "Local\\IRSDKMemMapFileName"
@@ -2462,8 +2539,10 @@ def _ir_session_info(text):
         if idx is None:
             continue
         name = field("UserName", body) or ""
-        drivers[int(idx)] = {"name": name, "car": field("CarScreenName", body) or ""}
-        if field("CarIsPaceCar", body) == "1" or field("IsSpectator", body) == "1":
+        skip = field("CarIsPaceCar", body) == "1" or field("IsSpectator", body) == "1"
+        drivers[int(idx)] = {"name": name, "car": field("CarScreenName", body) or "", "skip": skip,
+                             "cls": field("CarClassShortName", body) or ""}
+        if skip:
             continue
         cars += 1
         if info["car_idx"] is not None and int(idx) == info["car_idx"]:
@@ -2490,7 +2569,9 @@ class IRacingReader(Reader):
     WANT = ("Speed", "Throttle", "Brake", "SteeringWheelAngle", "SteeringWheelAngleMax", "Gear", "RPM",
             "LapDistPct", "LapCompleted", "LapCurrentLapTime", "LapLastLapTime", "OnPitRoad", "PlayerTrackSurface",
             "FuelLevel", "PlayerCarPosition", "PlayerCarIdx", "SessionNum", "SessionState", "SessionFlags",
-            "SessionTimeRemain", "WaterTemp", "OilTemp", "CarIdxPosition", "CarIdxF2Time", "IsOnTrack")
+            "SessionTimeRemain", "WaterTemp", "OilTemp", "CarIdxPosition", "CarIdxF2Time", "IsOnTrack",
+            "CarIdxLapDistPct", "CarIdxLapCompleted", "CarIdxOnPitRoad", "CarIdxLastLapTime", "CarIdxBestLapTime",
+            "CarIdxTrackSurface")
 
     def __init__(self):
         self.m = None
@@ -2589,7 +2670,26 @@ class IRacingReader(Reader):
             if b is not None and fr.gap_behind:
                 fr.car_behind = {"name": names.get(b, {}).get("name", ""), "position": fr.position + 1,
                                  "car": names.get(b, {}).get("car", ""), "gap_s": fr.gap_behind}
+        fr.field = self._field(g, info, me, pos)
         return fr
+
+    @staticmethod
+    def _field(g, info, me, pos):
+        """Every car from the CarIdx arrays (TrackSurface -1: not in the world, so left out)."""
+        pct, done, pit = g("CarIdxLapDistPct"), g("CarIdxLapCompleted"), g("CarIdxOnPitRoad")
+        if not pct or not done or not pos:
+            return None
+        last, best, surf = g("CarIdxLastLapTime"), g("CarIdxBestLapTime"), g("CarIdxTrackSurface")
+        out = []
+        for idx, d in info["drivers"].items():
+            if d.get("skip") or not 0 <= idx < len(pct) or (surf and idx < len(surf) and surf[idx] < 0):
+                continue
+            out.append(field_entry(idx, d.get("name"), d.get("car"), pos[idx] if idx < len(pos) else 0,
+                                   done[idx], pct[idx], bool(pit[idx]) if pit and idx < len(pit) else False,
+                                   last[idx] if last and idx < len(last) else None,
+                                   best[idx] if best and idx < len(best) else None, player=idx == me,
+                                   cls=d.get("cls")))
+        return out
 
 
 def _udp_owner(port):
@@ -2981,6 +3081,8 @@ class F1Reader(_UDPReader):
         self.pos, self.right, self.others, self.others_meta, self.cars = None, None, None, None, 0
         self.participants = {}
         self.car_positions = {}
+        self.car_laps = {}
+        self.events = []
         self.race_over = False
         self.car_ahead, self.car_behind = None, None
         self._uid = None
@@ -3016,6 +3118,7 @@ class F1Reader(_UDPReader):
         self.fuel, self.fuel_cap = 0.0, 0.0
         self.pos, self.right, self.wear, self.others, self.others_meta = None, None, None, None, None
         self.participants, self.car_positions = {}, {}
+        self.car_laps, self.events = {}, []
         self.car_ahead = self.car_behind = None
         self.fia_flag = self.sc = None
         self.session, self.race_laps, self.time_left, self.rain = None, 0, None, None
@@ -3143,6 +3246,9 @@ class F1Reader(_UDPReader):
                     cpos = d[b0 + p_off]
                     cld = _f(d, b0 + ld_off)
                     self.car_positions[k] = (cpos, cld)
+                    if b0 + rs_off < len(d):    # lastLapTimeInMS @0; lap number, pit status, pit stops after position
+                        self.car_laps[k] = (d[b0 + p_off + 1], d[b0 + p_off + 2], d[b0 + p_off + 3], d[b0 + rs_off],
+                                            _U_II(d, b0)[0] / 1000.0)
                     self.cars += 1
                     if self.position > 1 and cpos == self.position - 1:
                         nm, tm = self.participants.get(k, (f"Car {k + 1}", "F1 car"))
@@ -3156,6 +3262,9 @@ class F1Reader(_UDPReader):
                         dm = (my_ld - cld) % tlen
                         self.car_behind = {"name": nm, "position": cpos, "car": tm,
                                            "distance_m": round(max(1.0, dm)), "gap_s": self.gap_behind}
+            return None
+        if pid == 3 and len(d) >= 33:
+            self._event(d)
             return None
         if pid != 6 or self.lap is None or not self._sess_ok or len(d) < 29 + (me + 1) * 60:
             return None
@@ -3183,7 +3292,55 @@ class F1Reader(_UDPReader):
         fr.race_over = self.race_over
         fr.car_ahead, fr.car_behind = self.car_ahead, self.car_behind
         fr.flag = self.sc or self.fia_flag
+        fr.field = self._field(me, L)
+        if self.events:
+            fr.sim_events, self.events = self.events, []
         return fr
+
+    def _field(self, me, tlen):
+        """Every car with a race position. resultStatus: 3 finished, 4 DNF, 5 DSQ, 6 not classified, 7 retired;
+        pit status 1 pitting, 2 in the pit area."""
+        out = []
+        for k, (cpos, cld) in self.car_positions.items():
+            lapnum, pit, stops, res, last = self.car_laps.get(k, (1, 0, 0, 2, 0.0))
+            if not cpos or res in (0, 1):
+                continue
+            nm, tm = self.participants.get(k, (f"Car {k + 1}", "F1 car"))
+            out.append(field_entry(k, nm, tm, cpos, max(0, lapnum - 1), max(0.0, cld) / tlen, pit != 0, last, None,
+                                   {3: "finished", 4: "dnf", 5: "dsq", 6: "dnf", 7: "dnf"}.get(res), stops,
+                                   player=k == me))
+        return out
+
+    def _event(self, d):
+        """Event packet: eventStringCode @29, details @33. Kept as plain dicts with car indexes (= field ids)."""
+        code = bytes(d[29:33]).decode("ascii", "ignore")
+        n = len(d)
+        e = None
+        if code == "FTLP" and n >= 38:
+            e = {"type": "fastest_lap", "car": d[33], "time": _f(d, 34)}
+        elif code == "RTMT":
+            e = {"type": "retired", "car": d[33]}
+        elif code == "OVTK" and n >= 35:
+            e = {"type": "overtake", "car": d[33], "other": d[34]}
+        elif code == "COLL" and n >= 35:
+            e = {"type": "collision", "car": d[33], "other": d[34]}
+        elif code == "PENA" and n >= 40:
+            e = {"type": "penalty", "car": d[35], "penalty": d[33], "infringement": d[34], "seconds": d[37]}
+        elif code == "SCAR" and n >= 35:
+            e = {"type": "safety_car", "kind": {1: "sc", 2: "vsc", 3: "formation"}.get(d[33]),
+                 "phase": {0: "deployed", 1: "in", 2: "returned", 3: "resume"}.get(d[34])}
+        elif code == "LGOT":
+            e = {"type": "lights_out"}
+        elif code == "CHQF":
+            e = {"type": "chequered"}
+        elif code == "RCWN":
+            e = {"type": "winner", "car": d[33]}
+        elif code == "DRSE":
+            e = {"type": "drs", "on": True}
+        elif code == "DRSD":
+            e = {"type": "drs", "on": False}
+        if e is not None:
+            self.events = (self.events + [e])[-40:]
 
 
 class DR2Reader(_UDPReader):

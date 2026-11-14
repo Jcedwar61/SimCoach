@@ -11,6 +11,12 @@
 ![Report with pace against the target and the consistency score](https://raw.githubusercontent.com/Jcedwar61/SimCoach/main/docs/screenshots/6.10/report.png)
 
 
+### New: SimCast, live TV commentary
+<img src="simcast/assets/icon-256.png" width="72" align="left" alt="">
+
+**[SimCast](SIMCAST.md)** gives your race the television treatment: a two-person commentary booth (plus a pit-lane reporter) calls the *whole* race live while you drive: overtakes anywhere in the field, battles, pit stops, fastest laps, cars in trouble and the finish. Run `SimCast.bat`, or try the demo race without a sim. Includes a stream overlay for OBS.
+<br clear="left">
+
 ### Install
 Run `SimCoach-Setup.exe`. No admin rights needed; it installs Python 3.12, SimCoach's packages and free offline speech recognition. If Windows SmartScreen appears: *More info → Run anyway*. SimCoach tells you when a newer release is out and can install it for you.
 

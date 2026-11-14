@@ -18,6 +18,8 @@ run() {  # name, command...
 }
 cd "$HERE/tests"
 run "syntax (pyflakes)" bash -c "'$PY' -m pyflakes '$REPO/sim_coach.py' | grep -v 'imported but unused\|assigned to but never used\|redefinition of unused' | grep . && exit 1 || exit 0"
+run "syntax: SimCast (pyflakes)" bash -c "'$PY' -m pyflakes '$REPO/sim_cast.py' '$REPO/simcast' | grep . && exit 1 || exit 0"
+run "SimCast demo race (--test)" bash -c "APPDATA=\$(mktemp -d) '$PY' '$REPO/sim_cast.py' --test --laps 4 >/dev/null"
 run "offline coaching run (--test)" bash -c "APPDATA=\$(mktemp -d) '$PY' '$REPO/sim_coach.py' --test --no-voice --no-mic --no-overlay"
 for t in test_*.py; do run "${t%.py}" "$PY" "$t"; done
 run "reference library files" "$PY" "$REPO/tools/references/check_library.py"
