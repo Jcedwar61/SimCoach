@@ -1,10 +1,12 @@
 """A made-up race to listen to without a sim (and to test SimCast with): twelve cars on a fictional circuit,
 a standing start, cars held up behind slower ones until a passing place, pit stops, one spin, one retirement
-and a finish. It produces SimCoach Frames with the whole field, exactly like a sim reader does."""
+and a finish. It produces Frames with the whole field, exactly like a sim reader does."""
 from __future__ import annotations
 
 import math
 import random
+
+from . import sims
 
 TRACK = "Ridgeway Park"
 TRACK_LEN = 3600.0
@@ -86,8 +88,7 @@ class DemoRace:
     """read() gives a Frame each call. dt: seconds of race per call (live: the time since the last call)."""
     name = "Demo"
 
-    def __init__(self, sc, laps=8, seed=7, player_name="", grid_wait=8.0, events=True):
-        self.sc = sc
+    def __init__(self, laps=8, seed=7, player_name="", grid_wait=8.0, events=True):
         self.rng = random.Random(seed)
         self.laps = laps
         self.t = 0.0
@@ -194,7 +195,7 @@ class DemoRace:
 
     # -------------------------------------------------------------- frames
     def read(self, dt=1 / 30):
-        sc = self.sc
+        sc = sims
         self.step(dt)
         order = sorted(self.cars, key=lambda c: (c.status == "dnf", c.finished_at is None, c.finished_at or 0.0,
                                                  -c.dist))

@@ -40,6 +40,29 @@ def _dpi_aware():
             pass
 
 
+def dark_titlebar(win):
+    """Windows 10/11: a dark title bar, and on Windows 11 a caption and border in SimCast's colours."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+        dwm = ctypes.windll.dwmapi
+        on = ctypes.c_int(1)
+        for attr in (20, 19):
+            if dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(on), 4) == 0:
+                break
+
+        def rgb(h):
+            return ctypes.c_int(int(h[5:7], 16) << 16 | int(h[3:5], 16) << 8 | int(h[1:3], 16))
+        dwm.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(rgb(P["bg"])), 4)
+        dwm.DwmSetWindowAttribute(hwnd, 34, ctypes.byref(rgb(P["line"])), 4)
+        dwm.DwmSetWindowAttribute(hwnd, 36, ctypes.byref(rgb(P["fg"])), 4)
+    except Exception:
+        pass
+
+
 def _gap_text(s, i, session):
     if i == 0:
         return "Leader" if session == "race" else (_lap(s["best"]) if s["best"] else "")
@@ -62,9 +85,9 @@ def _lap(t):
 class SimCastWindow:
     POLL_MS = 400
 
-    def __init__(self, cast, sc=None, start_demo=False):
+    def __init__(self, cast, start_demo=False):
         _dpi_aware()
-        self.cast, self.sc = cast, sc
+        self.cast = cast
         self.root = r = tk.Tk(className="SimCast")
         r.title(f"{APP_NAME} {APP_VERSION}")
         r.configure(bg=P["bg"])
@@ -75,11 +98,7 @@ class SimCastWindow:
         self._style()
         self._icons()
         self._build()
-        if sc is not None:
-            try:
-                sc._win_dark_titlebar(r)
-            except Exception:
-                pass
+        dark_titlebar(r)
         self.last_line_t = 0.0
         self.captions = None
         self.settings_win = None
@@ -528,11 +547,7 @@ class SettingsWindow:
         w.configure(bg=P["panel"])
         w.transient(app.root)
         w.resizable(False, False)
-        if app.sc is not None:
-            try:
-                app.sc._win_dark_titlebar(w)
-            except Exception:
-                pass
+        dark_titlebar(w)
         nb = ttk.Notebook(w)
         nb.pack(fill="both", expand=True)
         self.v = {}

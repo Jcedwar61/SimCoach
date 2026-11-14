@@ -13,7 +13,7 @@
 
 A two-person booth (play-by-play and analyst, plus a pit-lane reporter) commentates the whole race: the start,
 overtakes, battles, pit stops, fastest laps, cars in trouble and the finish, for every car on the grid, not
-just yours. Reads the same sims as SimCoach (and can run alongside it).
+just yours. Stands alone: SimCoach doesn't need to be installed (the two can run side by side).
 
   SimCast.exe / SimCast.bat   the SimCast window
   --demo                      start with the demo race (no sim needed)
@@ -35,6 +35,16 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 
+def _crash_logging(log):
+    """Anything that goes wrong, in any thread, ends up in simcast.log (there's no console to see it in)."""
+    import traceback
+
+    def hook(t, v, tb):
+        log("".join(traceback.format_exception(t, v, tb)))
+    sys.excepthook = hook
+    threading.excepthook = lambda a: hook(a.exc_type, a.exc_value, a.exc_traceback)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="SimCast: live TV-style race commentary for sim racing.")
     ap.add_argument("--demo", action="store_true", help="start with the demo race")
@@ -46,7 +56,6 @@ def main(argv=None):
     ap.add_argument("--no-voice", action="store_true")
     args = ap.parse_args(argv)
 
-    import sim_coach as sc
     from simcast import app as app_mod
 
     if args.setup:
@@ -57,28 +66,24 @@ def main(argv=None):
         return 0
 
     if args.test:
-        cast = app_mod.headless_run(sc, laps=args.laps or 6, seed=args.seed, log=lambda m: None)
+        cast = app_mod.headless_run(laps=args.laps or 6, seed=args.seed, log=lambda m: None)
         for t, ln in cast.audio.spoken:
             name = cast.config().get(f"{ln.who}_name", ln.who)
             print(f"{int(t // 60):2d}:{int(t % 60):02d}  {name:>6}  {ln.text}")
         print(f"\n{len(cast.audio.spoken)} lines, {cast.events_seen} race moments, errors: {list(cast.errors) or 'none'}")
         return 1 if cast.errors else 0
 
-    try:                                     # SimCast's own log, %APPDATA%\SimCast\simcast.log (not SimCoach's)
-        os.makedirs(app_mod.APP_DIR, exist_ok=True)
-        sc.LOG_PATH = os.path.join(app_mod.APP_DIR, "simcast.log")
-        sc.install_crash_logging()
-    except Exception:
-        pass
+    _crash_logging(app_mod.file_log)
+    app_mod.file_log(f"SimCast {app_mod.APP_VERSION} starting (Python {sys.version.split()[0]}, {sys.platform})")
     cfg = app_mod.load_config()
-    cast = app_mod.SimCast(sc, cfg, log=print if args.console else sc.file_log)
+    cast = app_mod.SimCast(cfg, log=print if args.console else app_mod.file_log)
     if args.no_voice:
         cast.cfg["tts"] = "off"
         cast.save_enabled = False
 
     if not args.console:
         from simcast.gui import SimCastWindow
-        SimCastWindow(cast, sc, start_demo=args.demo).run()
+        SimCastWindow(cast, start_demo=args.demo).run()
         return 0
 
     print(f"SimCast {app_mod.APP_VERSION}: waiting for a sim... (Ctrl+C to quit)")

@@ -71,6 +71,11 @@ class Director:
         """The audio calls this as each line goes on air."""
         self.transcript.append((line.who, line.text))
 
+    def set_tracker(self, tr):
+        self.tr = tr
+        self.writer.tr = tr
+        self.reset()
+
     def reset(self):
         self.pending.clear()
         self._keys.clear()
@@ -102,6 +107,8 @@ class Director:
         cfg = self.cfg_fn()
         self.writer.cfg = cfg
         quiet_s, gap_s = CHATTER.get(cfg.get("chatter", "normal"), CHATTER["normal"])
+        if getattr(self.tr, "solo", False):
+            quiet_s *= 1.6                      # one car: less to talk about, so the quiet spells are longer
         top = self._best(now)
         if self.audio.speaking(now):
             if top is not None and top.priority >= CUT_IN and \

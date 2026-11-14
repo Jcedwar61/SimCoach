@@ -194,11 +194,8 @@ class AIBooth:
         cfg = self.cfg_fn()
         if not cfg.get("ai_colour", True):
             return False
-        try:
-            from sim_coach import ai_key, AI_PROVIDERS
-            return any(ai_key(cfg, p) for p in AI_PROVIDERS)
-        except Exception:
-            return bool(cfg.get("openai_api_key") or cfg.get("gemini_api_key") or cfg.get("deepseek_api_key"))
+        from .providers import AI_PROVIDERS, ai_key
+        return any(ai_key(cfg, p) for p in AI_PROVIDERS)
 
     def label(self):
         if not self.available():

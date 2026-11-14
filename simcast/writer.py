@@ -11,6 +11,8 @@ import random
 from collections import deque
 from dataclasses import dataclass
 
+from .race import call_name
+
 LEAD, ANALYST, PIT = "lead", "analyst", "pit"
 
 
@@ -208,7 +210,7 @@ class Writer:
     def event(self, e, now, interrupting=False) -> list:
         f = getattr(self, "ev_" + e.kind, None)
         lines = f(e, now) if f else []
-        lines = [ln for ln in (lines or []) if ln and ln.text]
+        lines = [Line(ln.who, ln.text[:1].upper() + ln.text[1:], ln.energy) for ln in (lines or []) if ln and ln.text]
         if interrupting and lines and lines[0].who == LEAD and lines[0].energy >= 2 and \
                 e.kind in ("overtake", "stopped", "moment", "contact", "retired"):
             cut = self.pick("cut", ["Oh, hang on!", "Wait a moment!", "Oh, look at this!", "Hold on!", ""])
@@ -218,6 +220,8 @@ class Writer:
 
     def ev_intro(self, e, now):
         tr = self.tr
+        if getattr(tr, "solo", False):
+            return self._solo_intro(now)
         track = tr.track or "the circuit"
         if tr.session != "race":
             kind = "qualifying" if tr.session == "qualifying" else "practice"
@@ -271,6 +275,8 @@ class Writer:
 
     def ev_start_review(self, e, now):
         d = e.data
+        if getattr(self.tr, "solo", False):
+            return self._solo_where(now, ANALYST, "Through the opening corners")
         out = []
         if d.get("leader") is not None:
             out.append(Line(LEAD, self.pick("sr_lead", [
@@ -551,6 +557,8 @@ class Writer:
 
     def ev_lap_one(self, e, now):
         tr = self.tr
+        if getattr(tr, "solo", False):
+            return self._solo_where(now, LEAD, "One lap down")
         p1, p2, p3 = tr.at(1), tr.at(2), tr.at(3)
         if not (p1 and p2):
             return []
@@ -566,6 +574,8 @@ class Writer:
 
     def ev_laps_to_go(self, e, now):
         tr = self.tr
+        if getattr(tr, "solo", False):
+            return self._solo_where(now, LEAD, f"{num_words(e.data['to_go']).capitalize()} laps to go")
         p1, p2 = tr.at(1), tr.at(2)
         n = num_words(e.data["to_go"]).capitalize()
         out = [Line(LEAD, f"{n} laps to go, and {self.n(p1.id, now) if p1 else 'the leader'} still leads.", 1)]
@@ -574,16 +584,23 @@ class Writer:
         return out
 
     def ev_halfway(self, e, now):
+        if getattr(self.tr, "solo", False):
+            return self._solo_where(now, LEAD, "Half distance")
         p1, p2 = self.tr.at(1), self.tr.at(2)
         lead = f", {self.n(p1.id, now)} leads by {gap_words(p2.interval)}" if p1 and p2 and p2.interval else ""
         return [Line(LEAD, f"We're at half distance{lead}.", 1)]
 
     def ev_time_to_go(self, e, now):
+        if getattr(self.tr, "solo", False):
+            return self._solo_where(now, LEAD, f"{e.data['label'].capitalize()} left on the clock")
         p1 = self.tr.at(1)
         return [Line(LEAD, f"{e.data['label'].capitalize()} left on the clock, and {self.n(p1.id, now) if p1 else 'the leader'} leads.", 1)]
 
     def ev_final_lap(self, e, now):
         tr = self.tr
+        if getattr(tr, "solo", False):
+            return [Line(LEAD, self.pick("s_final", ["White flag! This is the final lap.",
+                                                    "Here comes the last lap!"]), 2)] + self._solo_where(now, ANALYST, "")
         p1, p2 = tr.at(1), tr.at(2)
         out = [Line(LEAD, self.pick("final", [
             f"White flag! This is the final lap, and {self.n(p1.id, now)} leads!",
@@ -662,11 +679,246 @@ class Writer:
             f"A {t} for {self.n(a, now)}, up to {place(d.get('pos', 0))}.",
         ]), 1)]
 
+    def ev_accident(self, e, now):
+        a = e.cars[0]
+        return [Line(LEAD, self.pick("accident", [
+            f"Oh, there's been an accident! {self.n(a, now)} is involved!",
+            f"Trouble! An incident, and {self.n(a, now)} is caught up in it!",
+        ]), 3)]
+
+    # ------------------------------------------------------------------ one car: solo mode
+    def _solo_frame(self):
+        return getattr(self.tr, "frame", None)
+
+    def _solo_intro(self, now):
+        tr, f = self.tr, self._solo_frame()
+        me = tr.player()
+        who = self.n(me.id, now, full=True) if me else "our driver"
+        track = tr.track or "the circuit"
+        if tr.session == "race":
+            pos = f"from {place(f.position)}" if f and f.position else ""
+            field = f" in a field of {num_words(f.cars)}" if f and f.cars and f.cars < 100 else ""
+            length = f", {self._race_length()}" if tr.race_laps or tr.time_left else ""
+            return [Line(LEAD, f"Welcome to {track}, where we're following {who}{field}{length}.", 1),
+                    Line(ANALYST, f"Starting {pos}. Let's see what the afternoon brings." if pos else
+                         "Let's see what the afternoon brings.", 1)]
+        kind = "qualifying" if tr.session == "qualifying" else "practice"
+        return [Line(LEAD, f"Welcome to {track}, it's {kind}, and we're with {who}.", 1)]
+
+    def _solo_where(self, now, who, lead_in):
+        f = self._solo_frame()
+        me = self.tr.player()
+        if f is None or me is None or not f.position:
+            return []
+        bits = [f"{lead_in}{': ' if lead_in else ''}{self.n(me.id, now)} is {place(f.position) if f.position > 1 else 'leading'}"]
+        if f.car_ahead and f.gap_ahead and f.position > 1:
+            bits.append(f"{gap_words(f.gap_ahead)} behind {call_name(f.car_ahead.get('name', ''))}")
+        if f.car_behind and f.gap_behind and f.gap_behind < 3:
+            bits.append(f"{call_name(f.car_behind.get('name', ''))} {gap_words(f.gap_behind)} back")
+        return [Line(who, ", ".join(bits) + ".", 1)]
+
+    def ev_solo_gain(self, e, now):
+        d, me = e.data, e.cars[0]
+        other = f" past {call_name(d['other'])}" if d.get("other") else ""
+        return [Line(LEAD, self.pick("sgain", [
+            f"{self.n(me, now)} makes the move{other}! Up to {place(d['pos'])}!",
+            f"And {self.n(me, now)} is through{other}, that's {place(d['pos'])}!",
+            f"Lovely move from {self.n(me, now)}{other}, into {place(d['pos'])}!",
+        ]), 3 if d["pos"] <= 3 else 2)]
+
+    def ev_solo_loss(self, e, now):
+        d, me = e.data, e.cars[0]
+        by = f"{call_name(d['other'])} gets by" if d.get("other") else "A place lost"
+        return [Line(LEAD, self.pick("sloss", [
+            f"{by}, and {self.n(me, now)} drops to {place(d['pos'])}.",
+            f"{self.n(me, now)} loses a place there, down to {place(d['pos'])}.",
+        ]), 2)]
+
+    def ev_solo_closing(self, e, now):
+        d, me = e.data, e.cars[0]
+        return [Line(self.pick("sc_who", [LEAD, ANALYST]), self.pick("sclose", [
+            f"{self.n(me, now)} is reeling in {call_name(d['other'])}, about {gap_words(d['per_lap'])} a lap. "
+            f"It's {gap_words(d['gap'])} now.",
+            f"The gap to {call_name(d['other'])} is coming down, {gap_words(d['gap'])}. {self.n(me, now)} is on a charge.",
+        ]), 1)]
+
+    def ev_solo_pressure(self, e, now):
+        d, me = e.data, e.cars[0]
+        return [Line(ANALYST, self.pick("spress", [
+            f"{call_name(d['other'])} is closing on {self.n(me, now)}, {gap_words(d['gap'])} behind now.",
+            f"Pressure from behind for {self.n(me, now)}: {call_name(d['other'])} is {gap_words(d['gap'])} back and closing.",
+        ]), 1)]
+
+    def ev_solo_off(self, e, now):
+        me = e.cars[0]
+        return [Line(LEAD, self.pick("soff", [
+            f"Oh, {self.n(me, now)} is off the track!",
+            f"Wide! {self.n(me, now)} runs out of road there!",
+            f"A trip across the grass for {self.n(me, now)}!",
+        ]), 2)]
+
+    def _filler_solo(self, now):
+        """One car: say where it is only when that has changed, otherwise another angle, otherwise nothing
+        (a booth that repeats itself sounds like a loop)."""
+        f = self._solo_frame()
+        me = self.tr.player()
+        if f is None or me is None or now - me.mentioned < 25:
+            return []
+        state = (f.position, round(f.gap_ahead or 0, 0), round(f.gap_behind or 0, 0))
+        told = getattr(self, "_solo_state", None)
+        topics = []
+        if self.tr.session == "race" and state != told:
+            topics.append("where")
+        if me.last and me.best and me.laps != getattr(self, "_solo_lap_told", -1):
+            topics.append("lap")
+        if self.tr.race_laps and me.laps and me.laps != getattr(self, "_solo_togo_told", -1):
+            topics.append("togo")
+        if not topics:
+            return []
+        k = topics[0] if "where" in topics and self.chance(0.6) else self.rng.choice(topics)
+        if k == "where":
+            self._solo_state = state
+            return self._solo_where(now, LEAD, "")
+        if k == "lap":
+            self._solo_lap_told = me.laps
+            d = me.last - me.best
+            if d < 0.15:
+                txt = self.pick("s_lap_good", [
+                    f"Another strong lap from {self.n(me.id, now)}, a {lap_time_words(me.last)}.",
+                    f"A {lap_time_words(me.last)} that time, right on the pace.",
+                ])
+            else:
+                txt = self.pick("s_lap_off", [
+                    f"That last one was a {lap_time_words(me.last)}, {gap_words(d)} off the best.",
+                    f"A {lap_time_words(me.last)}. The best today is a {lap_time_words(me.best)}.",
+                ])
+            return [Line(ANALYST, txt, 1)]
+        self._solo_togo_told = me.laps
+        left = max(0, self.tr.race_laps - me.laps)
+        if left <= 0:
+            return []
+        return [Line(LEAD, f"{plural(left, 'lap').capitalize()} to go for {self.n(me.id, now)}, running {place(f.position) if f.position else 'on'}.", 1)]
+
+    # ------------------------------------------------------------------ rally
+    def _km(self, km):
+        if km < 1:
+            return f"{num_words(int(round(km * 1000 / 100)) * 100)} metres" if km > 0.1 else "a few metres"
+        whole, tenth = int(km), int(round((km - int(km)) * 10))
+        if tenth == 10:
+            whole, tenth = whole + 1, 0
+        if not tenth:
+            return "one kilometre" if whole == 1 else f"{num_words(whole)} kilometres"
+        return f"{num_words(whole)} point {num_words(tenth)} kilometres"
+
+    def ev_stage_intro(self, e, now):
+        d = e.data
+        stage = self.tr.track or "this stage"
+        car = f" in the {d['car']}" if d.get("car") and "car " not in d["car"] else ""
+        me = self.tr.player()
+        out = [Line(LEAD, self.pick("st_intro", [
+            f"Welcome to {stage}. {self._km(d['km']).capitalize()} against the clock.",
+            f"We're at {stage}, {self._km(d['km'])} of it, and {self.n(me.id, now) if me else 'our driver'} is on the start line{car}.",
+        ]), 1)]
+        if d.get("best"):
+            out.append(Line(ANALYST, f"The time to beat on this stage is a {lap_time_words(d['best'])}.", 1))
+        else:
+            out.append(Line(ANALYST, "First time through here with this car, so this run sets the benchmark.", 1))
+        return out
+
+    def ev_stage_start(self, e, now):
+        return [Line(LEAD, self.pick("st_go", [
+            "Three, two, one... and we're away!", "And off the line! Here we go!", "Go! And we're on the stage!",
+        ]), 3)]
+
+    def ev_split(self, e, now):
+        d = e.data
+        where = {0.25: "the first split", 0.5: "the halfway split", 0.75: "the final split"}.get(d["at"], "the split")
+        delta = d.get("delta")
+        if delta is None:
+            return [Line(LEAD, f"Through {where}, {lap_time_words(d['time'])} on the clock.", 1)]
+        if delta <= -0.05:
+            return [Line(LEAD, self.pick("split_up", [
+                f"Through {where}, and that's {gap_words(-delta)} up on the best!",
+                f"Green at {where}! {gap_words(-delta).capitalize()} up!",
+            ]), 2)]
+        if delta < 0.05:
+            return [Line(LEAD, f"{where.capitalize()}, and it's dead level with the best run.", 2)]
+        return [Line(LEAD, self.pick("split_down", [
+            f"Through {where}, {gap_words(delta)} down on the best.",
+            f"{where.capitalize()}: {gap_words(delta)} off the pace of the best run.",
+        ]), 1)]
+
+    def ev_rally_moment(self, e, now):
+        return [Line(LEAD, self.pick("r_mom", [
+            "Oh, big moment there!", "Whoa! That was close!", "Oh, sideways! Hold on to it!",
+            "That's a big hit of speed lost! Something happened there!",
+        ]), 3)]
+
+    def ev_rally_stopped(self, e, now):
+        return [Line(LEAD, self.pick("r_stop", [
+            "Oh no, we've stopped on the stage!", "The car has come to a halt! This is costing a lot of time!",
+        ]), 3)]
+
+    def ev_rally_going(self, e, now):
+        return [Line(ANALYST, "Going again, but that's taken a big chunk out of the time.", 1)]
+
+    def ev_rally_damage(self, e, now):
+        return [Line(ANALYST, self.pick("r_dmg", [
+            "That's done some damage. It'll need nursing to the end now.",
+            "There's damage on the car after that. Careful from here.",
+        ]), 2)]
+
+    def ev_stage_restart(self, e, now):
+        return [Line(LEAD, "And we're going again from the start.", 1)]
+
+    def ev_stage_finish(self, e, now):
+        d = e.data
+        t = lap_time_words(d["time"])
+        if d.get("new_best") and d.get("best"):
+            out = [Line(LEAD, f"Stop the clock! A {t}, and that's a new best on this stage by {gap_words(-d['delta'])}!", 3)]
+        elif d.get("new_best"):
+            out = [Line(LEAD, f"Stop the clock! A {t}. That's the time to beat now.", 2)]
+        else:
+            out = [Line(LEAD, f"Across the line, a {t}, {gap_words(d['delta'])} off the best.", 2)]
+        if d.get("top") and d["top"] > 100:
+            out.append(Line(ANALYST, f"Top speed on that run, {num_words(int(round(d['top'])))} kilometres an hour.", 1))
+        return out
+
+    def _filler_rally(self, now):
+        tr = self.tr
+        f = getattr(tr, "frame", None)
+        if f is None or not getattr(tr, "running", False) or now - getattr(self, "_rally_told", -1e9) < 26:
+            return []
+        self._rally_told = now
+        left = max(0.0, (1 - f.pct) * (f.track_len or 0) / 1000.0)
+        best = tr.store.get(tr.key) if getattr(tr, "store", None) else None
+        out = [Line(LEAD, self.pick("r_left", [
+            f"{self._km(left).capitalize()} to go.", f"Still {self._km(left)} left on this one.",
+        ]), 1)]
+        if best and best.get("profile"):
+            i = int(f.pct * 100)
+            ref = best["profile"][i] if i < len(best["profile"]) else None
+            if ref:
+                d = f.cur_time - ref
+                side = "up on" if d < 0 else "down on"
+                out.append(Line(ANALYST, self.pick("r_now", [
+                    f"Right now that's {gap_words(abs(d))} {side} the best run.",
+                    f"On the live timing, {gap_words(abs(d))} {side} the reference.",
+                    f"{gap_words(abs(d)).capitalize()} {'in hand' if d < 0 else 'to find'} compared with the best run.",
+                ]), 1))
+        elif f.speed > 120:
+            out.append(Line(ANALYST, f"{num_words(int(f.speed))} kilometres an hour through here. Fully committed.", 1))
+        return out
+
     # ------------------------------------------------------------------ quiet moments
     def filler(self, now, focus="balanced") -> list:
         """Something to say when nothing's happening: the running order, a battle, the player's race, the pace,
         the pit stops, or a driver who hasn't had a mention for a while."""
         tr = self.tr
+        if getattr(tr, "rally", False):
+            return self._filler_rally(now)
+        if getattr(tr, "solo", False):
+            return self._filler_solo(now)
         if tr.session != "race":
             return self._filler_quali(now)
         if not tr.started:

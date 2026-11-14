@@ -2,7 +2,7 @@
 around the lap, and the moments a commentator would talk about (overtakes, battles, pit stops, fastest laps,
 cars in trouble, the start and the finish).
 
-Input is SimCoach's Frame with Frame.field (one dict per car, see sim_coach.field_entry). Output is a list of
+Input is a sims.Frame with Frame.field (one dict per car, see sims.field_entry). Output is a list of
 Events per update. Nothing here talks or plays sound, so it can be tested on its own with a simulated clock.
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ def call_name(name: str) -> str:
     n = re.sub(r"\s+", " ", (name or "").replace("_", " ")).strip()
     n = re.sub(r"(?<=[A-Za-z])\d+$", "", n)
     parts = n.split(" ")
-    if len(parts) < 2 or parts[-1].isdigit() or parts[0].lower() in ("car", "ai", "driver", "#"):
+    if len(parts) < 2 or parts[-1].isdigit() or parts[0].lower() in ("car", "ai", "driver", "#", "the", "our"):
         return n or name
     last = parts[-1]
     if last.lower() in _SUFFIX and len(parts) > 2:
@@ -681,6 +681,10 @@ class RaceTracker:
             if k == "collision" and car and other and self.started:
                 prio = 92 if (car.player or other.player) else 84 if min(car.position, other.position) <= 5 else 66
                 ev.append(Event("contact", now, prio, (car.id, other.id), {}, ttl=10, key=f"col{car.id}.{other.id}.{int(now)}"))
+            elif k == "accident" and car and self.started:
+                prio = 92 if car.player else 82 if car.position <= 5 else 62
+                ev.append(Event("accident", now, prio, (car.id,), {"pos": car.position}, ttl=10,
+                                key=f"acc{car.id}.{int(now)}"))
             elif k == "penalty" and car and self.started:
                 prio = 80 if car.player else 58
                 ev.append(Event("penalty", now, prio, (car.id,), {"seconds": e.get("seconds") or 0}, ttl=20,
