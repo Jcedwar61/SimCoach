@@ -297,8 +297,8 @@ class SimCastWindow:
         ttk.Label(self.hero, text="Waiting for the green flag", style="Card.TLabel",
                   font=self.f["h1"]).grid(row=0, column=1, sticky="sw")
         ttk.Label(self.hero, style="Card.TLabel", foreground=P["mut"], wraplength=520, justify="left",
-                  text="Start a race in Le Mans Ultimate, rFactor 2, iRacing, Automobilista 2, RaceRoom, F1 25 or "
-                       "Assetto Corsa (with the CrewChiefEx app) and the booth goes on air by itself.\n\n"
+                  text="Start a race or a rally stage in any supported sim and the booth goes on air by itself. "
+                       "The sims SimCast found on this PC are below.\n\n"
                        "Or hear what it sounds like right now with a demo race."
                   ).grid(row=1, column=1, sticky="w", pady=(8, 14))
         ttk.Button(self.hero, text="▶  Start a demo race", style="Accent.TButton",

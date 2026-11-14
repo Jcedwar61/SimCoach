@@ -165,9 +165,8 @@ Section "-finish"
     StrCpy $FinishText "SimCast is installed, but some downloads didn't finish. SimCast finishes them the first \
 time it starts (keep the internet on). Details: install.log in the SimCast folder."
   ${Else}
-    StrCpy $FinishText "SimCast is ready. Start it and click Demo race to hear the booth, or just start a race in \
-your sim: SimCast goes on air by itself.$\r$\n$\r$\nAssetto Corsa: switch on the CrewChiefEx app so SimCast can see the \
-other cars."
+    StrCpy $FinishText "SimCast is ready. It finds the sims on this PC and sets them up.$\r$\n$\r$\nStart it \
+and click Demo race to hear the booth, or just start a race: SimCast goes on air by itself."
   ${EndIf}
 SectionEnd
 
