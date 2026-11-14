@@ -3,14 +3,15 @@
 # launcher that starts it there.
 #
 # Sims share their live data inside their own Wine prefix, so SimCast has to run in the same prefix, with the
-# same Proton, as the game. This script finds both from the game's Steam app id, runs SimCast-Setup.exe there
-# (silently), and writes ~/.local/bin/simcast-<game>.sh plus a menu entry. Start the game first, then SimCast.
+# same Proton, as the game. This script finds both from the game's Steam app id, opens the normal SimCast setup
+# wizard there (the same one as on Windows), and writes ~/.local/bin/simcast-<game>.sh plus a menu entry.
+# Start the game first, then SimCast.
 #
 #   ./install-simcast-wine.sh --game lmu                  a known sim (see --list)
 #   ./install-simcast-wine.sh --appid 2399420             any Steam game by app id
 #   ./install-simcast-wine.sh --prefix ~/.wine            a plain Wine prefix (uses the 'wine' on your PATH)
 # Options: --setup PATH (SimCast-Setup.exe; default: next to this script, else downloaded), --wine PATH,
-#          --name NAME (for the launcher), --list
+#          --name NAME (for the launcher), --silent (no wizard: install with the default choices), --list
 set -euo pipefail
 
 declare -A GAMES=(
@@ -28,7 +29,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 say() { printf '%s\n' "$*"; }
 die() { printf 'SimCast: %s\n' "$*" >&2; exit 1; }
 
-APPID="" PREFIX="" WINE="" SETUP="" NAME=""
+APPID="" PREFIX="" WINE="" SETUP="" NAME="" SILENT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --game) g="${2:-}"; [ -n "${GAMES[$g]:-}" ] || die "unknown game '$g' (see --list)"; APPID="${GAMES[$g]}"; NAME="$g"; shift 2;;
@@ -37,8 +38,9 @@ while [ $# -gt 0 ]; do
     --wine) WINE="${2:-}"; shift 2;;
     --setup) SETUP="$(realpath "${2:-}")"; shift 2;;
     --name) NAME="${2:-}"; shift 2;;
+    --silent) SILENT=1; shift;;
     --list) for k in "${!GAMES[@]}"; do printf '  --game %-9s %-28s (app id %s)\n' "$k" "${GAME_NAMES[$k]}" "${GAMES[$k]}"; done | sort; exit 0;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0;;
     *) die "unknown option '$1' (try --help)";;
   esac
 done
@@ -99,8 +101,14 @@ if [ -z "$SETUP" ]; then
 fi
 [ -f "$SETUP" ] || die "$SETUP not found"
 
-say "Installing SimCast into the prefix (it downloads Python and SimCast's packages: a few minutes) ..."
-env "${ENVV[@]}" "$WINE" "$SETUP" /S || die "the installer didn't finish"
+if [ -n "$SILENT" ]; then
+  say "Installing SimCast into the prefix (it downloads Python and SimCast's packages: a few minutes) ..."
+  env "${ENVV[@]}" "$WINE" "$SETUP" /S || die "the installer didn't finish"
+else
+  say "Opening the SimCast setup wizard. Click through it as on Windows (untick 'Start SimCast' on the last"
+  say "page: start it later with the launcher this script makes) ..."
+  env "${ENVV[@]}" "$WINE" "$SETUP" || die "the setup wizard was closed before it finished"
+fi
 
 EXE="$(ls -d "$PREFIX"/drive_c/users/*/AppData/Local/Programs/SimCast/SimCast.exe 2>/dev/null | head -1 || true)"
 [ -n "$EXE" ] || die "SimCast.exe isn't in the prefix after installing; see install.log in the prefix's SimCast folder"

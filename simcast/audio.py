@@ -94,20 +94,14 @@ def on_wine():
 
 
 def kokoro_usable():
-    """Kokoro needs NumPy and ONNX Runtime. On Windows they just work; under some Wine versions NumPy aborts the
-    whole process when it loads (Wine 9.0 lacks a maths function it uses), so there it's tried once in a separate
-    process first, and Kokoro is left out if that fails."""
+    """Kokoro needs NumPy and ONNX Runtime. On Windows they just work. Under Wine/Proton NumPy can abort the whole
+    process as it loads (Wine 9.0 lacks a maths function it uses), and even probing that in a separate process can
+    leave Wine's crash debugger hanging, so under Wine Kokoro is off unless SIMCAST_WINE_KOKORO=1 says the Wine in
+    use handles it. The Microsoft, Google and OpenAI voices work either way."""
     if _KOKORO_OK:
         return _KOKORO_OK[0]
-    ok = True
     if on_wine():
-        import subprocess
-        try:
-            r = subprocess.run([sys.executable, "-c", "import numpy, onnxruntime, kokoro_onnx"], timeout=90,
-                               capture_output=True)
-            ok = r.returncode == 0
-        except Exception:
-            ok = False
+        ok = os.environ.get("SIMCAST_WINE_KOKORO") == "1"
     else:
         try:
             import importlib.util

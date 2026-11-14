@@ -132,11 +132,14 @@ SimCast plays on the device picked in Settings > Voices > Play on. Add that devi
 On Linux, sims run in Wine or Proton, and they share their data inside their own Wine prefix. SimCast has to run in the same prefix as the game to see it.
 
 ## Install
-Run install-simcast-wine.sh (in the SimCast download) with the game's Steam app id or prefix:
+Run install-simcast-wine.sh (in the SimCast download) with the game's Steam app id or prefix. It opens the normal SimCast setup wizard inside the game's prefix (add --silent to skip it):
 - ./install-simcast-wine.sh --game lmu
 - ./install-simcast-wine.sh --appid 2399420
 - ./install-simcast-wine.sh --prefix ~/.wine
 It installs SimCast into that prefix with the Windows installer, and makes a launcher, simcast-<game>.sh, which starts SimCast in the same prefix and with the same Proton as the game. Start the game first, then SimCast.
+
+## Voices under Wine
+The Microsoft, Google and OpenAI voices work under Wine and Proton. The Kokoro voices are off there: the maths library they need can crash some Wine versions. If yours handles it, set SIMCAST_WINE_KOKORO=1 in the launcher script to switch them on.
 
 ## UDP sims
 F1 25, EA WRC and DiRT Rally 2.0 send UDP, which works between any prefix; the launcher still runs SimCast with the game's Proton.

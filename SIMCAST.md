@@ -74,8 +74,9 @@ Sims share their live data inside their own Wine prefix, so SimCast must run in 
 ```
 It finds the game's Proton prefix and Proton build, installs SimCast there silently, and makes
 `~/.local/bin/simcast-<game>.sh` plus a menu entry. Start the game, then SimCast. The installer needs no
-PowerShell (SimCast.exe gets uv, Python and the packages itself), and SimCast runs on Wine versions whose NumPy
-support is incomplete (it keeps NumPy out; the Kokoro voices are then left out and the others work).
+PowerShell (SimCast.exe gets uv, Python and the packages itself). The script opens the same setup wizard as on
+Windows (`--silent` skips it). Under Wine the Kokoro voices are off (NumPy can crash some Wine versions;
+`SIMCAST_WINE_KOKORO=1` switches them on); the Microsoft, Google and OpenAI voices work.
 
 ## For developers
 ```
