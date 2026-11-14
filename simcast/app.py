@@ -1,5 +1,5 @@
 """SimCast's engine room: reads the sim (or the demo race), keeps the race tracker and the director going, and
-holds what the control page shows. Settings live in %APPDATA%\\SimCast\\config.json; the AI provider, keys and
+holds what the window shows. Settings live in %APPDATA%\\SimCast\\config.json; the AI provider, keys and
 driver name come from SimCoach's settings unless SimCast has its own."""
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ DEFAULTS = {
     "volume": 0.9, "audio_out": "",
     "chatter": "normal", "focus": "balanced", "pit_reporter": True, "ai_colour": True,
     "driver_name": "", "ai_provider": "", "openai_api_key": "", "gemini_api_key": "", "deepseek_api_key": "",
-    "port": 8766, "lan": False, "open_browser": True, "demo_laps": 8,
+    "demo_laps": 8, "captions": False, "captions_pos": None, "window": None,
 }
 CHOICES = {"tts": ("edge", "openai", "off"), "chatter": ("quiet", "normal", "chatty"),
            "focus": ("field", "balanced", "me")}
@@ -66,9 +66,8 @@ def clean_config(cfg):
         cfg["speech_rate"] = 0
     try:
         cfg["demo_laps"] = max(2, min(30, int(cfg.get("demo_laps", 8))))
-        cfg["port"] = max(1024, min(65535, int(cfg.get("port", 8766))))
     except (TypeError, ValueError):
-        cfg["demo_laps"], cfg["port"] = 8, 8766
+        cfg["demo_laps"] = 8
     for k in ("lead_name", "analyst_name", "pit_name", "driver_name"):
         cfg[k] = " ".join(str(cfg.get(k) or "").split())[:40]
     return cfg
@@ -132,7 +131,7 @@ class SimCast:
         return out
 
     def update_settings(self, changes):
-        """From the control page. Unknown keys are ignored; key fields are only replaced when something's typed."""
+        """From the Settings window. Unknown keys are ignored; key fields are only replaced when something's typed."""
         with self.lock:
             for k, v in (changes or {}).items():
                 if k not in DEFAULTS:
@@ -165,20 +164,22 @@ class SimCast:
         if frame is None:
             return
         self.last_frame_t = now
-        try:
-            ev = self.tracker.update(frame, now)
-        except Exception as e:
-            self._error("Race tracker", e)
-            return
-        if ev:
-            self.events_seen += len(ev)
-            self.director.add(ev, now)
+        with self.lock:
+            try:
+                ev = self.tracker.update(frame, now)
+            except Exception as e:
+                self._error("Race tracker", e)
+                return
+            if ev:
+                self.events_seen += len(ev)
+                self.director.add(ev, now)
 
     def tick(self, now):
-        try:
-            self.director.tick(now)
-        except Exception as e:
-            self._error("Director", e)
+        with self.lock:
+            try:
+                self.director.tick(now)
+            except Exception as e:
+                self._error("Director", e)
 
     def _error(self, where, e):
         msg = f"{where}: {type(e).__name__}: {e}"
@@ -270,8 +271,12 @@ class SimCast:
         except Exception:
             return False
 
-    # -------------------------------------------------------------- what the page shows
+    # -------------------------------------------------------------- what the window shows
     def state(self):
+        with self.lock:
+            return self._state()
+
+    def _state(self):
         tr = self.tracker
         cfg = self.config()
         ld = tr.leader()

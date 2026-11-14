@@ -161,6 +161,22 @@ class BroadcastAudio(BaseAudio):
         except Exception:
             pass
 
+    def list_outputs(self):
+        """Playback devices (headset, speakers...), as the Settings window lists them."""
+        try:
+            import pygame
+            import pygame._sdl2.audio as sdl2_audio
+            temp = not pygame.mixer.get_init()
+            if temp:
+                pygame.mixer.init()
+            names = list(sdl2_audio.get_audio_device_names(False))
+            if temp:
+                pygame.mixer.quit()
+                self._mixer = False
+            return names
+        except Exception:
+            return []
+
     def preview(self, who, text, energy=1):
         """Say one line now (the settings page's voice test)."""
         from .writer import Line

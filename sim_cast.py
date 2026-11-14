@@ -9,16 +9,18 @@
 #   "pywin32; sys_platform == 'win32'",
 # ]
 # ///
-"""SimCast - live TV-style commentary of the sim race you're driving in.
+"""SimCast - live TV-style commentary of the sim race you're driving in (Windows 10/11).
 
 A two-person booth (play-by-play and analyst, plus a pit-lane reporter) commentates the whole race: the start,
 overtakes, battles, pit stops, fastest laps, cars in trouble and the finish, for every car on the grid, not
 just yours. Reads the same sims as SimCoach (and can run alongside it).
 
-  SimCast.bat                 start, open the control page in the browser
+  SimCast.exe / SimCast.bat   the SimCast window
   --demo                      start with the demo race (no sim needed)
+  --console                   no window: commentary in the console
   --test [--laps N]           a whole demo race, silently, on a fast clock: prints the commentary
-  --no-voice                  text only     --no-browser    don't open the page     --port N    page port
+  --no-voice                  text only
+  --setup                     download the packages and exit (the installer runs this)
 """
 from __future__ import annotations
 
@@ -36,16 +38,23 @@ if HERE not in sys.path:
 def main(argv=None):
     ap = argparse.ArgumentParser(description="SimCast: live TV-style race commentary for sim racing.")
     ap.add_argument("--demo", action="store_true", help="start with the demo race")
+    ap.add_argument("--console", action="store_true", help="no window: print the commentary")
     ap.add_argument("--test", action="store_true", help="silent demo race on a fast clock; print the commentary")
+    ap.add_argument("--setup", action="store_true", help="check the packages load, then exit")
     ap.add_argument("--laps", type=int, default=None)
     ap.add_argument("--seed", type=int, default=3)
     ap.add_argument("--no-voice", action="store_true")
-    ap.add_argument("--no-browser", action="store_true")
-    ap.add_argument("--port", type=int, default=None)
     args = ap.parse_args(argv)
 
     import sim_coach as sc
     from simcast import app as app_mod
+
+    if args.setup:
+        import importlib
+        for mod in ("edge_tts", "openai", "pygame", "numpy"):     # uv has installed them by the time this runs
+            importlib.import_module(mod)
+        print("SimCast is ready.")
+        return 0
 
     if args.test:
         cast = app_mod.headless_run(sc, laps=args.laps or 6, seed=args.seed, log=lambda m: None)
@@ -55,38 +64,35 @@ def main(argv=None):
         print(f"\n{len(cast.audio.spoken)} lines, {cast.events_seen} race moments, errors: {list(cast.errors) or 'none'}")
         return 1 if cast.errors else 0
 
-    from simcast.web import WebUI
+    try:                                     # SimCast's own log, %APPDATA%\SimCast\simcast.log (not SimCoach's)
+        os.makedirs(app_mod.APP_DIR, exist_ok=True)
+        sc.LOG_PATH = os.path.join(app_mod.APP_DIR, "simcast.log")
+        sc.install_crash_logging()
+    except Exception:
+        pass
     cfg = app_mod.load_config()
+    cast = app_mod.SimCast(sc, cfg, log=print if args.console else sc.file_log)
     if args.no_voice:
-        cfg["tts"] = "off"
-    sc.install_crash_logging() if hasattr(sc, "install_crash_logging") else None
-    cast = app_mod.SimCast(sc, cfg)
-    if args.no_voice:
+        cast.cfg["tts"] = "off"
         cast.save_enabled = False
-    web = WebUI(cast)
-    if not web.start(args.port or cfg.get("port", 8766), lan=bool(cfg.get("lan"))):
-        print("Couldn't start the control page (no free port).")
-    else:
-        print(f"SimCast {app_mod.APP_VERSION}: control page at {web.url()}  (stream overlay: {web.url()}overlay)")
+
+    if not args.console:
+        from simcast.gui import SimCastWindow
+        SimCastWindow(cast, sc, start_demo=args.demo).run()
+        return 0
+
+    print(f"SimCast {app_mod.APP_VERSION}: waiting for a sim... (Ctrl+C to quit)")
     if args.demo:
         cast.start_demo(args.laps)
     stop = threading.Event()
     loop = threading.Thread(target=cast.run, args=(stop,), daemon=True, name="simcast-loop")
     loop.start()
-    if web.port and cfg.get("open_browser", True) and not args.no_browser:
-        try:
-            import webbrowser
-            webbrowser.open(web.url())
-        except Exception:
-            pass
-    print("Waiting for a sim... (Ctrl+C to quit)")
     try:
         while loop.is_alive():
             time.sleep(0.5)
     except KeyboardInterrupt:
         pass
     stop.set()
-    web.stop()
     return 0
 
 

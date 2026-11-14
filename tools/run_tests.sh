@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run SimCoach's tests. Each one uses a throwaway settings folder, never your real one.
 #   tools/run_tests.sh             offline tests (about 3 minutes)
-#   tools/run_tests.sh --gui       + the real app window (needs a display; on Linux: xvfb-run, python3-tk)
+#   tools/run_tests.sh --gui       + the real SimCoach and SimCast windows (needs a display; on Linux: xvfb-run, python3-tk)
 #   tools/run_tests.sh --network   + the update check against GitHub
 # PYTHON=... picks the interpreter (needs numpy and openai; the window tests need tkinter).
 set -uo pipefail
@@ -25,8 +25,10 @@ for t in test_*.py; do run "${t%.py}" "$PY" "$t"; done
 run "reference library files" "$PY" "$REPO/tools/references/check_library.py"
 if [ "$NET" = 1 ]; then for t in net_test_*.py; do run "${t%.py}" "$PY" "$t"; done; fi
 if [ "$GUI" = 1 ]; then
-  if command -v xvfb-run >/dev/null && [ -z "${DISPLAY:-}" ]; then run "gui_test_app" xvfb-run -a -s "-screen 0 1280x900x24" "$PY" gui_test_app.py
-  else run "gui_test_app" "$PY" gui_test_app.py; fi
+  if command -v xvfb-run >/dev/null && [ -z "${DISPLAY:-}" ]; then
+    run "gui_test_app" xvfb-run -a -s "-screen 0 1280x900x24" "$PY" gui_test_app.py
+    run "gui_test_simcast" xvfb-run -a -s "-screen 0 1400x950x24" "$PY" gui_test_simcast.py
+  else run "gui_test_app" "$PY" gui_test_app.py; run "gui_test_simcast" "$PY" gui_test_simcast.py; fi
 fi
 echo; echo "$pass passed, $fail failed${failed:+: ${failed[*]}}"
 [ "$fail" = 0 ]

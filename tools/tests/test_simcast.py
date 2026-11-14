@@ -5,8 +5,6 @@ import os
 import re
 import struct
 import sys
-import urllib.error
-import urllib.request
 
 from _common import REPO, check, done, load
 
@@ -233,47 +231,22 @@ check(("overtake", 3, 7) in kinds and ("collision", 1, 2) in kinds and ("fastest
       any(e["type"] == "safety_car" and e["kind"] == "sc" and e["phase"] == "deployed" for e in f1.events) and
       any(e["type"] == "penalty" and e["car"] == 5 and e["seconds"] == 5 for e in f1.events), f"F1 events ({kinds})")
 
-# ---------------------------------------------------------------- the web page's API
-from simcast.web import WebUI  # noqa: E402
+# ---------------------------------------------------------------- settings
 cast = SimCast(sc, dict(DEFAULTS), audio=SimAudio(), log=lambda m: None, booth=False, save=False)
 cast._simcoach_t = 1e18
-web = WebUI(cast, log=lambda m: None)
-check(web.start(port=18766), "web: starts")
-base = web.url()
-
-
-def post(path, body, token=True):
-    req = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json",
-                                          **({"X-SimCast-Token": web.token} if token else {})})
-    try:
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status
-    except urllib.error.HTTPError as e:
-        return e.code
-
-
-with urllib.request.urlopen(base, timeout=5) as r:
-    page = r.read().decode()
-check(web.token in page and "SimCast" in page, "web: the control page carries its token")
-check(post("api/settings", {"settings": {"chatter": "chatty"}}, token=False) == 403, "web: no token, no changes")
-check(post("api/settings", {"settings": {"chatter": "chatty", "openai_api_key": "sk-secret-123456",
-                                         "bogus": 1}}) == 200 and cast.cfg["chatter"] == "chatty",
-      "web: settings change with the token")
-check(post("api/settings", {"settings": {"chatter": "shouty"}}) == 200 and cast.cfg["chatter"] == "normal",
-      "web: a bad value falls back to the default")
-with urllib.request.urlopen(base + "state.json", timeout=5) as r:
-    st = json.loads(r.read())
-check("sk-secret" not in json.dumps(st) and st["settings"]["keys"]["openai_api_key"], "web: keys never sent back, only 'set'")
-check(post("api/demo", {"on": True}) == 200 and cast.demo is not None, "web: demo race starts")
-for asset in ("icon-256.png", "hero-car.jpg", "helmet-128.png", "favicon.png"):
-    with urllib.request.urlopen(base + "assets/" + asset, timeout=5) as r:
-        check(r.status == 200 and len(r.read()) > 1000, f"web: {asset}")
-try:
-    urllib.request.urlopen(base + "assets/..%2F..%2Fsim_cast.py", timeout=5)
-    check(False, "web: no files outside assets")
-except urllib.error.HTTPError as e:
-    check(e.code == 404, "web: no files outside assets")
-web.stop()
+cast.update_settings({"chatter": "chatty", "openai_api_key": "sk-secret-123456", "bogus": 1})
+check(cast.cfg["chatter"] == "chatty" and "bogus" not in cast.cfg, "settings: change, unknown keys ignored")
+cast.update_settings({"chatter": "shouty", "volume": 7, "openai_api_key": ""})
+check(cast.cfg["chatter"] == "normal" and cast.cfg["volume"] == 1.0, "settings: bad values fall back or clamp")
+check(cast.cfg["openai_api_key"] == "sk-secret-123456", "settings: an empty key box keeps the saved key")
+st = cast.state()
+check("sk-secret" not in json.dumps(st) and st["settings"]["keys"]["openai_api_key"],
+      "settings: keys never shown back, only 'set'")
+cast.start_demo(3)
+check(cast.demo is not None and cast.source == "Demo", "demo race starts")
+cast.stop_demo()
+check(cast.demo is None and not cast.source, "demo race stops")
+for asset in ("icon-256.png", "icon-48.png", "logo-40.png", "hero-car-240.png", "helmet-32.png"):
+    check(os.path.getsize(os.path.join(REPO, "simcast", "assets", asset)) > 500, f"asset {asset}")
 check(os.path.exists(os.path.join(REPO, "SimCast.ico")), "SimCast.ico in the repo")
 done()
