@@ -29,6 +29,7 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Overlay and phone screen:** a click-through overlay with delta and pedal traces, plus a live page for a phone or tablet on the same Wi-Fi (click *Phone screen* and scan the code).
 * **Talk to it:** push-to-talk (wheel button or F8) with offline speech recognition; optional AI answers, banter and setup briefings through OpenAI, Google Gemini or DeepSeek, with automatic fallback.
 * **Reports:** an HTML report after each session.
+* **Works with SimCast:** run [SimCast](https://github.com/Jcedwar61/SimCast)'s TV commentary at the same time and its booth drops under the coach and crew while they talk, then comes back up.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
