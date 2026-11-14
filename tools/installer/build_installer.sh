@@ -1,23 +1,29 @@
 #!/usr/bin/env bash
-# Build SimCoach-Setup.exe from the repo (needs Go 1.22+; cross-compiles from Linux/macOS too) and check that every
-# file inside it matches the repo byte for byte. Writes ./SimCoach-Setup.exe at the repo root.
+# Build the SimCoach-Setup.exe wizard from the repo with NSIS (makensis, Linux or Windows: apt install nsis) and check
+# that every file inside it matches the repo byte for byte (7-Zip reads NSIS installers: apt install p7zip-full).
+# Writes ./SimCoach-Setup.exe at the repo root.
 #   tools/installer/build_installer.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(cd "$HERE/../.." && pwd)"
-PY="${PYTHON:-python3}"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-cp "$REPO"/installer-source/{main.go,files.go,files_test.go,go.mod,rsrc_windows_amd64.syso} "$WORK/"
-mkdir -p "$WORK/payload"
-cp "$REPO"/installer-source/{install.ps1,uninstall.ps1} "$WORK/payload/"
-cp "$REPO"/{sim_coach.py,README.txt,SimCoach.exe,SimCoach.ico,SimCoach.bat,run_coach.bat,bind_push_to_talk.bat} "$WORK/payload/"
-cd "$WORK"
-export GOTOOLCHAIN=local
-go vet . && go test . >/dev/null
-GOOS=windows GOARCH=amd64 go vet .
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-H windowsgui -s -w" -o SimCoach-Setup.exe .
-"$PY" "$HERE/extract_payload.py" SimCoach-Setup.exe "$WORK/check" >/dev/null
-for f in $(cd payload && ls); do
-  cmp -s "payload/$f" "check/payload/$f" || { echo "MISMATCH inside the installer: $f"; exit 1; }
+VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' "$REPO/sim_coach.py")"
+[ -n "$VERSION" ] || { echo "APP_VERSION not found in sim_coach.py"; exit 1; }
+IFS=. read -r a b c d <<<"$VERSION"; VIVERSION="${a:-0}.${b:-0}.${c:-0}.${d:-0}"
+FILES=(sim_coach.py SimCoach.exe SimCoach.ico SimCoach.bat run_coach.bat bind_push_to_talk.bat README.txt)
+cp "$REPO/installer-source/simcoach.nsi" "$REPO/installer-source/install.ps1" "$WORK/"
+cp -r "$REPO/installer-source/art" "$WORK/art"
+cp "$REPO/LICENSE" "$WORK/LICENSE.txt"
+for f in "${FILES[@]}"; do cp "$REPO/$f" "$WORK/"; done
+(cd "$WORK" && makensis -V2 -WX -DVERSION="$VERSION" -DVIVERSION="$VIVERSION" simcoach.nsi)
+# what's inside must be exactly the repo's files
+mkdir "$WORK/check"
+7z x -y -o"$WORK/check" "$WORK/SimCoach-Setup.exe" >/dev/null
+for f in "${FILES[@]}" install.ps1; do
+  cmp -s "$WORK/$f" "$WORK/check/$f" || { echo "MISMATCH inside the installer: $f"; exit 1; }
 done
-cp SimCoach-Setup.exe "$REPO/SimCoach-Setup.exe"
-echo "Built $REPO/SimCoach-Setup.exe ($(wc -c < SimCoach-Setup.exe) bytes); all $(ls payload | wc -l) bundled files match the repo."
+cmp -s "$WORK/LICENSE.txt" "$WORK/check/LICENSE.txt" || { echo "MISMATCH inside the installer: LICENSE.txt"; exit 1; }
+SIZE=$(wc -c < "$WORK/SimCoach-Setup.exe")
+# SimCoach 6.x checks a downloaded update is at least 500 kB before running it
+[ "$SIZE" -ge 500000 ] || { echo "installer is only $SIZE bytes: older SimCoach versions would refuse it as an update"; exit 1; }
+cp "$WORK/SimCoach-Setup.exe" "$REPO/SimCoach-Setup.exe"
+echo "Built $REPO/SimCoach-Setup.exe (SimCoach $VERSION wizard, $SIZE bytes); all $(( ${#FILES[@]} + 2 )) files inside match the repo."

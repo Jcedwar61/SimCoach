@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.11.1)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.12)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 * ### Quick setup
@@ -31,6 +31,10 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Reports:** an HTML report after each session.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.12
+* **A proper Windows installer:** SimCoach-Setup.exe is now a standard setup wizard: welcome, licence, choose your shortcuts and install folder, a progress page, then *Start SimCoach*. The downloads (Python, packages, speech recognition) happen inside the wizard instead of a console window. Uninstall from *Settings → Apps* as before; your laps, settings and reports are kept.
+* **New icon:** the helmet-and-headset icon on the desktop, Start menu, taskbar, the app window and the installer.
 
 ### What's new in 6.11.1
 * **Setup sheet works in Assetto Corsa:** ticking a box now changes your car's actual setup (fuel, tyre pressures, brake bias, wing, anti-roll bars, dampers, diff, TC, ABS, tyre compound) through SimCoach's helper app in Custom Shaders Patch, and the sheet shows what really changed, e.g. *Rear wing 7 → 6*. Before, it changed nothing in the car. In races and qualifying the car must be in the pits (in single-player practice, anywhere); a box that can't be applied unticks itself and says why. Unticking puts your car's own value back. **Restart Assetto Corsa once after updating** so it loads the new helper.

@@ -3,13 +3,15 @@ SimCoach - live English voice coach for your sims
 
 Quick start & installation (Windows 10 / 11)
 --------------------------------------------
-  - With the installer: run SimCoach-Setup.exe.
-    * Installs for your Windows account only (no admin rights needed) into %LOCALAPPDATA%\Programs\SimCoach,
-      adds SimCoach (with its own icon) to the desktop and Start menu, and registers an Uninstall entry
-      under Settings > Apps > Installed apps.
-    * The setup window downloads uv (the Python runner, from github.com/astral-sh/uv), Python 3.12,
+  - With the installer: run SimCoach-Setup.exe, a standard setup wizard (Next, I Agree, Next, Install,
+    Finish).
+    * Installs for your Windows account only (no admin rights needed), by default into
+      %LOCALAPPDATA%\Programs\SimCoach (you can pick another folder), adds SimCoach to the desktop and Start
+      menu (you choose which), and registers an Uninstall entry under Settings > Apps > Installed apps.
+    * The progress page downloads uv (the Python runner, from github.com/astral-sh/uv), Python 3.12,
       SimCoach's packages, and offline speech recognition (about 1 GB, a few minutes) so the first launch
-      opens straight away.
+      opens straight away. If a download doesn't finish, the last page says so and SimCoach finishes it the
+      first time it starts. Silent install: SimCoach-Setup.exe /S.
     * Because the installer isn't code-signed, Windows SmartScreen may show "Windows protected your PC":
       click "More info", then "Run anyway".
     * Updating: run a newer SimCoach-Setup.exe over the top (it closes any running SimCoach first and saves

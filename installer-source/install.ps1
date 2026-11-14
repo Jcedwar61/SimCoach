@@ -1,25 +1,29 @@
-# SimCoach setup steps (run by SimCoach-Setup.exe in its own console window).
-# Exit codes: 0 = all done, 2 = installed but the parts download didn't finish (first launch retries), 1 = failed.
-param([string]$Dest = $PSScriptRoot)
+# SimCoach setup steps, run by the setup wizard (SimCoach-Setup.exe) one at a time with no window of their own;
+# what they print shows in the wizard's progress list.
+#   -Step close   close a SimCoach running from the install folder (its session is saved first)
+#   -Step uv      find or download uv, which runs SimCoach with its own Python
+#   -Step parts   Python 3.12, SimCoach's packages and the offline speech recognition
+# Exit codes: 0 = done, 2 = didn't finish (SimCoach finishes it on first launch), 1 = failed.
+# 'parts' also leaves setup-ready.txt in the install folder when it really finished: the wizard checks for that file
+# rather than trusting an exit code (a blocked or missing PowerShell can look like success).
+param([string]$Dest = $PSScriptRoot, [ValidateSet('close', 'uv', 'parts')][string]$Step = 'parts')
 
 $ErrorActionPreference = 'Stop'
-try { $Host.UI.RawUI.WindowTitle = 'SimCoach setup' } catch {}
+$ProgressPreference = 'SilentlyContinue'
 $log = Join-Path $Dest 'install.log'
-try { Start-Transcript -Path $log -Force | Out-Null } catch {}
 
-function Step($n, $t) { Write-Host ''; Write-Host "  [$n/4]  $t" -ForegroundColor Cyan }
-function Ok($t)   { Write-Host "          ok  $t" -ForegroundColor Green }
-function Warn($t) { Write-Host "          !!  $t" -ForegroundColor Yellow }
-function Note($t) { Write-Host "          $t" -ForegroundColor DarkGray }
+function Say($t) { Write-Output $t; try { Add-Content -Path $log -Value "$(Get-Date -Format s)  $t" } catch {} }
 
 # A SimCoach running from this folder: politely first (it saves the session and writes its report), then force.
 function Get-SimCoachProcs {
     $script = Join-Path $Dest 'sim_coach.py'
     @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.ProcessId -ne $PID -and $_.Name -notlike 'SimCoach-Setup*' -and (
+        $_.ProcessId -ne $PID -and $_.Name -notlike 'SimCoach-Setup*' -and $_.Name -notlike 'Uninstall SimCoach*' -and
+        $_.Name -notlike 'Au_*' -and (
             (($_.Name -like 'python*' -or $_.Name -like 'uv*') -and $_.CommandLine -and
              $_.CommandLine.IndexOf($script, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or
-            ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($Dest + '\', [StringComparison]::OrdinalIgnoreCase)))
+            ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($Dest + '\', [StringComparison]::OrdinalIgnoreCase) -and
+             $_.Name -like 'SimCoach.exe'))
     })
 }
 
@@ -35,9 +39,7 @@ function Close-SimCoach {
         }
     }
     $deadline = (Get-Date).AddSeconds(8)
-    while ((Get-Date) -lt $deadline -and @(Get-SimCoachProcs).Count -gt 0) {      # Python, then uv and the launcher
-        Start-Sleep -Milliseconds 300
-    }
+    while ((Get-Date) -lt $deadline -and @(Get-SimCoachProcs).Count -gt 0) { Start-Sleep -Milliseconds 300 }
     # what's left: the launcher first (it waits on SimCoach and would report the others closing), then uv, then Python
     $left = @(Get-SimCoachProcs | Sort-Object { if ($_.Name -like 'SimCoach*') { 0 } elseif ($_.Name -like 'uv*') { 1 } else { 2 } })
     foreach ($p in $left) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -55,114 +57,58 @@ function Find-UV {
     return $null
 }
 
-$warn = $false
 try {
-    Write-Host ''
-    Write-Host '  SimCoach setup' -ForegroundColor White
-    Note "Installing to $Dest"
-
-    # an update while SimCoach is running: close it, or the new version can't start (one SimCoach at a time)
-    try {
-        $ErrorActionPreference = 'Continue'
-        if (Close-SimCoach) { Note 'closed the SimCoach that was running (its session was saved)' }
-        Remove-Item (Join-Path $Dest 'SimCoach.exe.old') -Force -ErrorAction SilentlyContinue
-    } catch {
-        Warn "couldn't close the running SimCoach: $($_.Exception.Message)"
-    } finally {
-        $ErrorActionPreference = 'Stop'
-    }
-
-    # 1. uv: runs SimCoach with its own Python 3.12 and packages (nothing touches a system Python)
-    Step 1 'Python runner (uv)'
-    $uv = Find-UV
-    if (-not $uv) {
-        Note 'downloading uv from github.com/astral-sh/uv ...'
-        try {
-            # uv's official release zip (uv.exe, uvw.exe, uvx.exe), into the folder uv's own installer uses
-            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
-            $bin = Join-Path $env:USERPROFILE '.local\bin'
-            $zip = Join-Path $env:TEMP 'simcoach-uv.zip'
-            $ProgressPreference = 'SilentlyContinue'
-            Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-$arch-pc-windows-msvc.zip" -OutFile $zip
-            New-Item -ItemType Directory -Force -Path $bin | Out-Null
-            Expand-Archive -Force -Path $zip -DestinationPath $bin
-            Remove-Item $zip -Force -ErrorAction SilentlyContinue
-        } catch {
-            Warn "uv download failed: $($_.Exception.Message)"
-        } finally {
-            $ErrorActionPreference = 'Stop'
+    switch ($Step) {
+        'close' {
+            $ErrorActionPreference = 'Continue'
+            if (Close-SimCoach) { Say 'Closed the SimCoach that was running (its session was saved).' }
+            Remove-Item (Join-Path $Dest 'SimCoach.exe.old') -Force -ErrorAction SilentlyContinue
+            exit 0
         }
-        $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
-        $uv = Find-UV
+        'uv' {
+            $uv = Find-UV
+            if (-not $uv) {
+                Say 'Downloading uv from github.com/astral-sh/uv ...'
+                try {
+                    # uv's official release zip (uv.exe, uvw.exe, uvx.exe), into the folder uv's own installer uses
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+                    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+                    $bin = Join-Path $env:USERPROFILE '.local\bin'
+                    $zip = Join-Path $env:TEMP 'simcoach-uv.zip'
+                    Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-$arch-pc-windows-msvc.zip" -OutFile $zip
+                    New-Item -ItemType Directory -Force -Path $bin | Out-Null
+                    Expand-Archive -Force -Path $zip -DestinationPath $bin
+                    Remove-Item $zip -Force -ErrorAction SilentlyContinue
+                } catch {
+                    Say "uv download failed: $($_.Exception.Message)"
+                }
+                $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
+                $uv = Find-UV
+            }
+            if ($uv) { Say "uv: $uv"; exit 0 }
+            Say 'uv is not installed yet; SimCoach installs it the first time it starts.'
+            exit 2
+        }
+        'parts' {
+            $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
+            $uv = Find-UV
+            if (-not $uv) { Say 'Skipped: no uv yet (SimCoach finishes this the first time it starts).'; exit 2 }
+            $env:PYTHONIOENCODING = 'utf-8'
+            $env:NO_COLOR = '1'
+            $env:UV_NO_PROGRESS = '1'
+            Remove-Item (Join-Path $Dest 'setup-ready.txt') -Force -ErrorAction SilentlyContinue
+            Push-Location $Dest
+            $ErrorActionPreference = 'Continue'
+            & $uv run --python 3.12 (Join-Path $Dest 'sim_coach.py') --setup 2>&1 | ForEach-Object { Say "$_" }
+            $code = $LASTEXITCODE
+            Pop-Location
+            if ($code -eq 0) { Set-Content -Path (Join-Path $Dest 'setup-ready.txt') -Value 'ok'; Say 'Ready.'; exit 0 }
+            Say "Stopped (code $code); SimCoach finishes this the first time it starts."
+            exit 2
+        }
     }
-    if ($uv) { Ok $uv } else { Warn 'uv is not installed yet; SimCoach installs it on first launch'; $warn = $true }
-
-    # 2. shortcuts with the SimCoach icon
-    Step 2 'Desktop and Start menu shortcuts'
-    $exe = Join-Path $Dest 'SimCoach.exe'
-    $ico = Join-Path $Dest 'SimCoach.ico'
-    $ws = New-Object -ComObject WScript.Shell
-    foreach ($folder in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
-        if (-not $folder) { continue }
-        $lnk = $ws.CreateShortcut((Join-Path $folder 'SimCoach.lnk'))
-        $lnk.TargetPath = $exe
-        $lnk.WorkingDirectory = $Dest
-        $lnk.IconLocation = "$ico,0"
-        $lnk.Description = 'SimCoach - live voice coach for sim racing'
-        $lnk.Save()
-    }
-    Ok 'SimCoach on the desktop and in the Start menu'
-
-    # 3. Settings > Apps entry with an uninstaller
-    Step 3 'Apps & features entry'
-    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SimCoach'
-    New-Item -Path $key -Force | Out-Null
-    $ps = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    $un = Join-Path $Dest 'uninstall.ps1'
-    $size = [int]((Get-ChildItem $Dest -Recurse -File | Measure-Object Length -Sum).Sum / 1KB)
-    $props = [ordered]@{
-        DisplayName          = 'SimCoach'
-        DisplayVersion       = '6.11.1'
-        Publisher            = 'SimCoach'
-        DisplayIcon          = $ico
-        InstallLocation      = $Dest
-        UninstallString      = "`"$ps`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$un`""
-        QuietUninstallString = "`"$ps`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$un`" -Quiet"
-    }
-    foreach ($k in $props.Keys) { New-ItemProperty -Path $key -Name $k -Value $props[$k] -PropertyType String -Force | Out-Null }
-    foreach ($k in @('NoModify', 'NoRepair')) { New-ItemProperty -Path $key -Name $k -Value 1 -PropertyType DWord -Force | Out-Null }
-    New-ItemProperty -Path $key -Name 'EstimatedSize' -Value $size -PropertyType DWord -Force | Out-Null
-    Ok 'Settings > Apps > Installed apps > SimCoach (Uninstall is there)'
-
-    # 4. the parts: Python 3.12, the packages and the offline speech parts, so the first launch is quick
-    Step 4 'SimCoach parts (Python 3.12, packages, offline speech parts)'
-    if ($uv) {
-        Note 'a few minutes the first time; later updates are quick ...'
-        $ErrorActionPreference = 'Continue'
-        Push-Location $Dest
-        & $uv run --python 3.12 (Join-Path $Dest 'sim_coach.py') --setup
-        $code = $LASTEXITCODE
-        Pop-Location
-        $ErrorActionPreference = 'Stop'
-        if ($code -eq 0) { Ok 'ready' } else { Warn "parts setup stopped (code $code); they finish on first launch"; $warn = $true }
-    } else {
-        Warn 'skipped (no uv yet)'
-        $warn = $true
-    }
-
-    Write-Host ''
-    if ($warn) { Write-Host '  SimCoach is installed (some parts finish on first launch).' -ForegroundColor Yellow }
-    else       { Write-Host '  SimCoach is installed and ready.' -ForegroundColor Green }
-    try { Stop-Transcript | Out-Null } catch {}
-    Start-Sleep -Seconds 2
-    if ($warn) { exit 2 } else { exit 0 }
 }
 catch {
-    Write-Host ''
-    Write-Host "  Setup failed: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "  Details: $log" -ForegroundColor DarkGray
-    try { Stop-Transcript | Out-Null } catch {}
-    Read-Host '  Press Enter to close'
+    Say "Setup step '$Step' failed: $($_.Exception.Message)"
     exit 1
 }

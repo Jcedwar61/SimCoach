@@ -1,14 +1,12 @@
 SimCoach-Setup.exe source
 =========================
-main.go / files.go         the installer (Go). It embeds everything in a "payload" folder next to it.
-install.ps1, uninstall.ps1 the setup steps the installer runs / registers (put them in payload\).
-rsrc_windows_amd64.syso    icon, version (6.2) and "no admin rights" manifest, linked in automatically.
+simcoach.nsi     the setup wizard (NSIS 3, Modern UI 2): welcome, licence, shortcuts, install folder, progress,
+                 finish ("Start SimCoach"), plus the uninstaller in Settings > Apps. Installs per user, no admin.
+install.ps1      the setup steps the wizard runs with no window of their own (close a running SimCoach, get uv,
+                 then Python 3.12, the packages and the offline speech recognition); their output shows in the
+                 wizard's progress list.
+art\             the wizard's sidebar (164x314) and header (150x57) images, 24-bit BMP.
 
-To rebuild (Go 1.22+):
-  1. Make a "payload" folder here containing: install.ps1, uninstall.ps1, sim_coach.py, README.txt,
-     SimCoach.exe, SimCoach.ico, SimCoach.bat, run_coach.bat, bind_push_to_talk.bat
-  2. set GOOS=windows& set GOARCH=amd64& go build -trimpath -ldflags "-H windowsgui -s -w" -o SimCoach-Setup.exe .
-Run "SimCoach-Setup.exe --silent" to install without any dialogs.
-
-Easier: tools/installer/build_installer.sh builds it from the repo and checks every bundled file,
-and tools/installer/set_version.py sets a new version everywhere (see tools/README.md).
+To rebuild: tools/installer/build_installer.sh (needs makensis and 7z: apt install nsis p7zip-full, or the
+Windows versions). It takes the version from sim_coach.py, builds SimCoach-Setup.exe and checks every file inside
+it matches the repo. Run "SimCoach-Setup.exe /S" to install silently.

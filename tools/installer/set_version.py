@@ -3,14 +3,12 @@
     python tools/installer/set_version.py 6.4
 
 - sim_coach.py               APP_VERSION (window title, header, --version, update check)
-- installer-source/install.ps1  DisplayVersion (Settings > Apps)
-- installer-source/rsrc_windows_amd64.syso  the installer's Windows version info
 - README.md                  "(Windows Installer, vX)" on the download link
-Then rebuild the installer with tools/installer/build_installer.sh.
+The installer takes its version (wizard title, Settings > Apps, file properties) from APP_VERSION when
+tools/installer/build_installer.sh builds it.
 """
 import os
 import re
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -31,10 +29,7 @@ def main(v):
     if not re.fullmatch(r"\d+(\.\d+){0,3}", v):
         sys.exit("version looks like 6.4 or 6.4.1")
     sub("sim_coach.py", r'^APP_VERSION = "[^"]*"$', f'APP_VERSION = "{v}"')
-    sub("installer-source/install.ps1", r"(DisplayVersion\s*=\s*)'[^']*'", rf"\g<1>'{v}'")
     sub("README.md", r"\(Windows Installer, v[0-9.]+\)", f"(Windows Installer, v{v})")
-    subprocess.check_call([sys.executable, os.path.join(HERE, "make_syso.py"), os.path.join(REPO, "SimCoach-Setup.exe"),
-                           os.path.join(REPO, "installer-source", "rsrc_windows_amd64.syso"), v])
     print("Now add a \"What's new\" section to README.md and run tools/installer/build_installer.sh")
 
 
