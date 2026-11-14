@@ -43,10 +43,12 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 ## Releasing a new version
 
 1. Make the changes and run `tools/run_tests.sh --gui --network`.
-2. `python tools/installer/set_version.py 6.4` sets the version in sim_coach.py, the installer's Apps entry,
-   the installer's Windows version info and the README download link. Add a "What's new" section to README.md.
-3. `tools/installer/build_installer.sh` rebuilds `SimCoach-Setup.exe` (Go 1.22+, works from Linux too) and
-   checks every bundled file matches the repo.
+2. `python tools/installer/set_version.py 6.4` sets the version in sim_coach.py and the README download link.
+   Add a "What's new" section to README.md.
+3. `tools/installer/build_installer.sh` rebuilds the `SimCoach-Setup.exe` wizard with NSIS (`apt install nsis
+   p7zip-full`; works from Linux), taking the version from sim_coach.py, and checks every file inside matches
+   the repo. `tools/installer/wine_check.sh` runs it under Wine and screenshots every page (`apt install wine
+   wine32:i386 xvfb xdotool imagemagick`).
 4. Merge to main, then `tools/release/make_zip.sh` writes `dist/SimCoach-v6.4-release.zip` from origin/main.
 5. Publish the GitHub release: tag `v6.4` on main, attach **SimCoach-Setup.exe** (exactly this name: installed
    copies' update check looks for it) and the zip.
@@ -54,9 +56,11 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 
 ## Installer helpers
 
-- `installer/extract_payload.py SimCoach-Setup.exe [OUT]` lists (or extracts) the files bundled in an installer.
-- `installer/make_syso.py SRC.exe OUT.syso VERSION` writes the icon / manifest / version resources.
-- `installer/pe_resources.py` reads resources out of a .exe (used by make_syso).
+- `installer-source/simcoach.nsi` is the wizard; `installer-source/install.ps1` the setup steps it runs.
+- `7z l SimCoach-Setup.exe` lists the files inside an installer (`7z x` extracts them).
+- `installer/set_exe_icon.py SimCoach.exe SimCoach.ico` puts a new icon into the launcher (pip install pefile).
+  The icon's source is `installer-source/art/icon-512.png`; make SimCoach.ico from it (16-256 px) first.
+- `release/export_csp_app.py sim_coach.py OUT` writes the Assetto Corsa helper app (it goes in the release zip).
 
 ## Reference data
 
