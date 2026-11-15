@@ -217,13 +217,17 @@ Tabs & settings
     automatically" to send new and improved laps to the library without being asked each time (off by
     default; needs GitHub sign-in).
   - Radio check: test push-to-talk, microphone level meter, speech recognition, coach reply, voice output,
-    and total round-trip time before launching a sim, or send a typed question.
+    and total round-trip time before launching a sim, or send a typed question. The microphone row names the
+    host API that opened your mic (WASAPI shared mode is preferred; it never takes the mic exclusively) and
+    shows the half-second already recorded before you pressed.
   - Laps & corners: live session lap table and turn-by-turn loss, minimum speed, and issue breakdown.
   - Settings:
     * Voice & audio: driver name, coach voice, speaking speed, volume, speaker/headset (including VR
-      headsets), microphone, and speech recognition (offline recognition runs on your PC for free; "OpenAI
-      online (uses key)" sends only your push-to-talk clips to OpenAI and falls back to offline recognition
-      if the connection drops). Supports Microsoft neural voices, Google voices, and local neural voices.
+      headsets), microphone, mic input (host API), mic boost, and speech recognition (offline recognition runs
+      on your PC for free and is tuned for radio: speech-band filtering, a noise gate, radio bias words and a
+      second decode when a first one looks thin; "OpenAI online (uses key)" sends only your push-to-talk clips
+      to OpenAI and falls back to offline recognition if the connection drops). Supports Microsoft neural
+      voices, Google voices, and local neural voices.
     * Wheel buttons: bind Push-to-talk (hold), Repeat last message, Mute/unmute coach, Braking tones
       on/off, Show/hide overlay, Start/stop a data capture, and Show/hide the setup sheet. Works while the
       game has focus (F8 is the keyboard fallback for push-to-talk).
