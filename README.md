@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.13)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.14)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 * ### Quick setup
@@ -32,6 +32,11 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Works with SimCast:** run [SimCast](https://github.com/Jcedwar61/SimCast)'s TV commentary at the same time and its booth drops under the coach and crew while they talk, then comes back up.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.14
+* **Push-to-talk you can trust.** Speech recognition is rebuilt. The microphone now runs all the time, so the half second *before* you press is already recorded and nothing at the front of a sentence is lost. The clip is cleaned (DC and handling rumble removed, speech band passed, a noise gate against fan and sim noise, level normalised) and decoded with radio bias words, so "box this lap", "sector two" and "brake bias" come back as words instead of guesses; a thin result is decoded a second way before anything reaches the coach. On test clips the word error rate fell from 5.8% to 0.8% clean and from 11.9% to 6.8% on a noisy headset mic, at roughly half the delay.
+* **The right mic, the right way.** Mics are opened on **WASAPI in shared mode** (DirectSound, MME and WDM-KS follow in that order), so nothing else can be shut out of your headset; an unplugged headset falls back to the Windows default instead of leaving push-to-talk dead (it used to hold the mic open for the whole session). New *Settings â†’ Mic input* and *Mic boost*, and the radio check names the API it opened and shows the pre-roll. Short commands are no longer thrown away.
+* **Fixed:** the speech model setting was ignored after a restart, and a very quiet mic was rejected.
 
 ### What's new in 6.13
 * **Runs alongside SimCast:** with [SimCast](https://github.com/Jcedwar61/SimCast) (live TV commentary for your race) running at the same time, the commentary drops under the coach and crew while they talk, braking tones included, and comes back up after. Both keep talking; neither goes silent. Set how far it drops in SimCast (*Settings → Voices → When SimCoach talks*, SimCast 1.1 or later). Nothing leaves your PC.

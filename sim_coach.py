@@ -4,7 +4,7 @@
 #   "numpy",
 #   "pygame>=2.5",
 #   "sounddevice",
-#   "faster-whisper>=1.0",
+#   "faster-whisper>=1.1",
 #   "edge-tts>=6.1",
 #   "gTTS>=2.5",
 #   "kokoro-onnx>=0.4",
@@ -69,7 +69,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.13"
+APP_VERSION = "6.14"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -83,6 +83,8 @@ DEFAULT_CONFIG = {
     "volume": 0.9,
     "audio_out": "",
     "mic": "",
+    "mic_api": "auto",
+    "mic_gain": 1.0,
     "whisper_model": "small.en",
     "buttons": {},
     "ptt_key": "f8",
@@ -146,7 +148,7 @@ OPENAI_MODELS = ["gpt-6-luna", "gpt-6.1-terra", "gpt-5.6-luna"]
 GEMINI_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-flash-latest"]
 DEEPSEEK_MODELS = ["deepseek-chat", "deepseek-flash", "deepseek-v4-pro", "deepseek-reasoner"]
 RETIRED_OPENAI_MODELS = ("gpt-4o", "gpt-4.1", "gpt-4-", "gpt-3.5")
-WHISPER_MODELS = [("Fast (base.en)", "base.en"), ("Balanced (small.en)", "small.en"),
+WHISPER_MODELS = [("Balanced (small.en)", "small.en"), ("Fastest (base.en)", "base.en"),
                   ("Most accurate (medium.en)", "medium.en"), ("OpenAI online (uses key)", "openai")]
 
 BINS = 2000
@@ -399,6 +401,12 @@ def _sane_config(cfg):
         cfg["briefing_mode"] = "daily"
     if cfg.get("crew_language") not in ("clean", "salty"):
         cfg["crew_language"] = "clean"
+    if cfg.get("mic_api") not in dict(MIC_APIS):
+        cfg["mic_api"] = "auto"
+    try:
+        cfg["mic_gain"] = max(0.25, min(4.0, float(cfg.get("mic_gain", 1.0))))
+    except (TypeError, ValueError):
+        cfg["mic_gain"] = 1.0
     sp = cfg.get("second_screen_port")
     cfg["second_screen_port"] = int(sp) if _sane_num(sp) and 1024 <= int(sp) <= 65535 else 8765
 
@@ -4192,53 +4200,176 @@ WHISPER_PROMPT = ("Sim racing team radio. Turn, braking point, apex, throttle, l
 STT_KEYWORDS = ["braking point", "apex", "trail braking", "understeer", "oversteer", "theoretical best",
                 "delta", "tyres", "setup", "race setup", "pit window", "box this lap", "debrief", "repeat",
                 "quiet", "talk more", "reset reference", "braking tones", "split deltas", "report", "fuel"]
+# Decoding bias for the offline model: the words a driver actually says on the radio, so Whisper picks
+# "box this lap" or "sector two" instead of inventing a similar-sounding phrase.
+STT_HOTWORDS = ("Team radio to the race engineer. Box this lap, fuel map, brake bias, trail braking, apex, "
+                "understeer, oversteer, sector one, sector two, sector three, delta, gap ahead, callout, "
+                "braking tones, brake markers, radio check, tyres, tyre temps, setup, pit window, debrief, "
+                "repeat, quiet, talk more, reset reference, split deltas, report, fuel left, energy.")
+MIC_APIS = [("auto", "Auto (best for this mic)"), ("wasapi", "WASAPI (shared)"),
+            ("directsound", "DirectSound"), ("mme", "MME"), ("wdm", "WDM-KS")]
+API_RANK = {"wasapi": 0, "directsound": 1, "mme": 2, "wdm": 3}      # WDM-KS is a fallback only
+SPEECH_RATE = 16000
+PREROLL_S = 0.4
+MAX_CLIP_S = 25.0
+MIN_PEAK = 0.00005                      # below this the mic is muted or the wrong one
+STT_BEAM = 5
 
 
-def _mme_hostapi(sd):
-    try:
-        return next((i for i, a in enumerate(sd.query_hostapis()) if "MME" in a["name"]), None)
-    except Exception:
-        return None
-
-
-def list_input_devices():
-    """Microphone names (Windows MME list, which accepts any sample rate)."""
-    try:
-        import sounddevice as sd
-        mme = _mme_hostapi(sd)
-        return [d["name"] for d in sd.query_devices()
-                if d["max_input_channels"] > 0 and (mme is None or d["hostapi"] == mme)]
-    except Exception:
-        return []
-
-
-def _input_index(name):
-    if not name:
-        return None
-    try:
-        import sounddevice as sd
-        mme = _mme_hostapi(sd)
-        for i, d in enumerate(sd.query_devices()):
-            if d["max_input_channels"] > 0 and d["name"] == name and (mme is None or d["hostapi"] == mme):
-                return i
-    except Exception:
-        pass
+def _api_kind(hostapi_name):
+    """Which of MIC_APIS a PortAudio host API is, or None for the ones we don't use."""
+    n = (hostapi_name or "").upper()
+    if "WDM-KS" in n:
+        return "wdm"
+    for kind in API_RANK:
+        if kind.upper() in n:
+            return kind
     return None
 
 
+
+def _input_hostapis(sd, cfg):
+    """Host API kinds to look at, best first: the chosen one when set, else every one (MME last)."""
+    try:
+        kinds = {_api_kind(a["name"]) for a in sd.query_hostapis()} - {None}
+    except Exception:
+        return []
+    want = cfg.get("mic_api") or "auto"
+    if want in API_RANK:
+        return [want] if want in kinds else []
+    return [k for _r, k in sorted((API_RANK[k], k) for k in kinds)]
+
+
+def _input_devices(sd, cfg):
+    """(index, name, kind) for every openable microphone, best host API first (WASAPI, DirectSound, MME)."""
+    apis = _input_hostapis(sd, cfg)
+    rank = {k: i for i, k in enumerate(apis)}
+    out = []
+    try:
+        hosts = sd.query_hostapis()
+        devices = sd.query_devices()
+        devices = [devices[i] for i in range(len(devices))] if isinstance(devices, dict) else devices
+        for i, d in enumerate(devices):
+            if d["max_input_channels"] > 0 and d["hostapi"] < len(hosts):
+                kind = _api_kind(hosts[d["hostapi"]]["name"])
+                if kind in rank:
+                    out.append((rank[kind], i, f"{d['name']}", kind))
+    except Exception:
+        return []
+    out.sort()
+    return [(i, n, k) for _r, i, n, k in out]
+
+
+def list_input_devices(cfg=None):
+    """Microphone names, one entry per mic (WASAPI first; DirectSound and MME only when Auto is set)."""
+    try:
+        import sounddevice as sd
+    except Exception:
+        return []
+    cfg = cfg if cfg is not None else {"mic_api": "auto"}
+    seen, names = set(), []
+    for _i, name, _kind in _input_devices(sd, cfg):
+        if name not in seen and name not in ("Stereo Mix (Realtek HD Audio Stereo input)",):
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def _live_mic(name):
+    """The full device name for a short saved one: PortAudio cuts names at 31 characters (Astro A20 Voice
+    -> "Headset Microphone (Astro A20 V"), so the saved short name is matched back to the real device."""
+    try:
+        import sounddevice as sd
+        names = [d["name"] for d in sd.query_devices() if d["max_input_channels"] > 0]
+    except Exception:
+        return name
+    longer = [n for n in names if n.startswith(name)]
+    return max(longer, key=len) if longer else name
+
+
+def _input_candidates(cfg, name):
+    """(device index, host API kind) to try for a chosen mic: the chosen host API first, then the others, then
+    the Windows default device."""
+    default = [(None, kind) for kind in ("wasapi", "directsound", "mme")]
+    if not name:
+        return default
+    try:
+        import sounddevice as sd
+    except Exception:
+        return default
+    every = {"mic_api": "auto"}
+    def matches(n):
+        n = (n or "").rstrip()
+        return n == name or n.startswith(name) or name.startswith(n)
+    best = [(i, k) for i, n, k in _input_devices(sd, cfg) if matches(n)]
+    rest = [(i, k) for i, n, k in _input_devices(sd, every) if matches(n) and (i, k) not in best]
+    return best + rest or default
+
+
+def open_input(cfg, device, callback, blocksize=1024):
+    """Open the microphone mono and return (stream, host API kind, sample rate). WASAPI is preferred, in shared
+    mode so it can never take the mic exclusively, and 16 kHz is tried first. The chosen mic is retried on the
+    other host APIs before giving up, and a mic that has gone (an unplugged headset) falls back to the Windows
+    default instead of failing outright."""
+    import sounddevice as sd
+    errors = []
+    tried_default = False
+    for idx, kind in _input_candidates(cfg, device):
+        if idx is None:
+            if tried_default:
+                break
+            tried_default = True
+        for rate in ([SPEECH_RATE, 48000, 44100] if kind in ("wasapi", "directsound") else [None]):
+            try:
+                if rate is None:
+                    rate = int(sd.query_devices(idx)["default_samplerate"] or 48000) if idx is not None \
+                        else SPEECH_RATE
+                kw = {"samplerate": rate, "channels": 1, "dtype": "float32", "blocksize": blocksize,
+                      "callback": callback}
+                if idx is not None:
+                    kw["device"] = idx
+                if kind == "wasapi" and sys.platform == "win32":
+                    try:
+                        kw["extra_settings"] = sd.WasapiSettings(exclusive=False)
+                    except Exception:
+                        pass
+                if idx is None and kind is not None:
+                    # PortAudio cannot apply host API options to the default device, so pick its real index
+                    try:
+                        idx = sd.default.device[0]
+                        kw["device"] = idx
+                        kw.pop("extra_settings", None)
+                    except Exception:
+                        idx = None
+                stream = sd.InputStream(**kw)
+                stream.start()
+                return stream, kind, rate
+            except Exception as e:
+                errors.append(f"{kind or 'Windows default'} {rate or ''}: {e}")
+    raise RuntimeError("; ".join(errors[-3:]) or "no input device")
+
+
 class Listener:
-    """Push-to-talk from a wheel button, the on-screen button or the keyboard fallback key;
-    records the chosen mic and transcribes offline with faster-whisper (English model + voice-activity
-    filter) or online with OpenAI (falls back to offline if OpenAI can't be reached)."""
+    """Push-to-talk from a wheel button, the on-screen button or the keyboard fallback key.
+
+    The mic runs all the time at the host API's own rate, so the clip starts with half a second already
+    recorded: press, speak straight away, and nothing at the front is lost. The clip is cleaned (DC and
+    rumble removed, speech band passed, a noise gate, then normalised), resampled to 16 kHz and transcribed
+    with faster-whisper's English model and radio bias words (or with OpenAI). When a result is thin the
+    clip is decoded again a second way before anything is handed to the coach.
+    """
 
     def __init__(self, cfg, voice: Voice, controls, on_text, log=print, events=None):
         self.cfg, self.voice, self.controls, self.on_text, self.log = cfg, voice, controls, on_text, log
         self.events = events
         self.level = self.peak = 0.0
         self.model_name = cfg.get("whisper_model", "small.en")
+        self.sig = (self.model_name, cfg.get("mic"), cfg.get("mic_api"))
         self.gui_ptt = threading.Event()
         self.stop = threading.Event()
         self._online_off_until = 0.0
+        self._device_sig = None
+        self._stream = self._model = self._api = self._rate = None
         self.state = "starting"
         threading.Thread(target=self._run, daemon=True, name="listener").start()
 
@@ -4247,18 +4378,22 @@ class Listener:
                 or DEFAULT_CONFIG["openai_api_key"] or "").strip()
 
     def _local_model(self):
-        """Offline faster-whisper model (also the fallback when OpenAI can't be reached)."""
-        name = self.model_name if self.model_name != "openai" else "small.en"
+        """Offline faster-whisper English model (also the fallback when OpenAI can't be reached)."""
+        want = self.model_name if self.model_name != "openai" else DEFAULT_CONFIG["whisper_model"]
+        if self._model is not None and getattr(self, "_model_name", None) == want:
+            return self._model
         try:
             from faster_whisper import WhisperModel
-            self.log(f"Loading speech model {name} (first run downloads it)...")
-            return WhisperModel(name, device="cpu", compute_type="int8",
-                                cpu_threads=min(2, max(1, (os.cpu_count() or 4) // 4)))
+            self.log(f"Loading speech model {want} (the first run downloads it)...")
+            self._model = WhisperModel(want, device="cpu", compute_type="int8", num_workers=1,
+                                       cpu_threads=max(1, min(4, (os.cpu_count() or 4) - 1)))
+            self._model_name = want
+            return self._model
         except Exception as e:
             self.log(f"Speech model failed to load: {e}")
             return None
 
-    def _transcribe_openai(self, audio):
+    def _transcribe_openai(self, audio, hint=None):
         """Send the push-to-talk clip (16 kHz mono) to OpenAI as a WAV and return the text."""
         import io
         import wave
@@ -4269,11 +4404,11 @@ class Listener:
         with wave.open(buf, "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
-            w.setframerate(16000)
+            w.setframerate(SPEECH_RATE)
             w.writeframes(pcm)
-        client = openai_client(self._key()).with_options(timeout=6.0, max_retries=0)
+        client = openai_client(self._key()).with_options(timeout=8.0, max_retries=0)
         kw = {"model": self.cfg.get("openai_stt_model") or "gpt-transcribe",
-              "file": ("ptt.wav", buf.getvalue(), "audio/wav"), "prompt": WHISPER_PROMPT}
+              "file": ("ptt.wav", buf.getvalue(), "audio/wav"), "prompt": hint or WHISPER_PROMPT}
         try:
             r = client.audio.transcriptions.create(**kw, extra_body={"languages": ["en"], "keywords": STT_KEYWORDS})
         except openai.BadRequestError:
@@ -4290,6 +4425,55 @@ class Listener:
                 return False
         return False
 
+    def _ensure_stream(self, sd):
+        """(Re)open the mic when the chosen device or host API changed; a stale stream is why a switched
+        mic used to stay silent. Returns the host API kind. Called on the listener thread only."""
+        sig = self.cfg.get("mic") or ""
+        if self._stream is not None:
+            if self._device_sig != sig:
+                self._close_stream()
+            else:
+                try:
+                    if self._stream.active:
+                        return self._api
+                    self._stream.start()
+                    return self._api
+                except Exception:
+                    self._close_stream()
+        api = self._open_mic(sd, sig)
+        self._device_sig = sig
+        return api
+
+    def _open_mic(self, sd, name):
+        """Open the microphone; returns the host API kind for the radio check."""
+        t_open = time.monotonic()
+        stream, kind, rate = open_input(self.cfg, name, self._on_audio)
+        self._stream, self._api, self._rate = stream, kind, rate
+        self._preroll = deque(maxlen=max(1, int(rate * PREROLL_S / 1024)))
+        self.log(f"Microphone open: {kind or 'Windows default'} at {rate} Hz "
+                 f"({time.monotonic() - t_open:.2f} s)")
+        return kind
+
+    def _close_stream(self):
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+
+    def _on_audio(self, d, _frames, _t, _status):
+        """Capture callback: keeps the pre-roll ring filled and measures the level for the meter."""
+        block = d[:, 0].copy()
+        self._preroll.append(block)
+        lv = float(min(1.0, max(-block.min(), block.max()) if len(block) else 0.0))
+        self.level = lv
+        if lv > self.peak:
+            self.peak = lv
+        if self.state == "listening":
+            self._chunks.append(block)
+
     def _run(self):
         try:
             import numpy as np
@@ -4302,99 +4486,126 @@ class Listener:
             import keyboard as kb
         except Exception:
             kb = None
-        model = None
-        if self.model_name == "openai":
+        self._chunks = []
+        self._preroll = deque()
+        self._api = None
+        online = self.model_name == "openai"
+        if online:
             if self._key():
                 self.log("Speech recognition: OpenAI (online). Hold push-to-talk and speak.")
             else:
                 self.log("Speech recognition is set to OpenAI but there's no API key; using the offline model.")
-        if self.model_name != "openai" or not self._key():
-            model = self._local_model()
-            if model is None:
-                self.state = "error"
-                return
-            self.log("Speech recognition ready. Hold push-to-talk and speak.")
+        elif self._local_model() is None:
+            self.state = "error"
+            return
         self.state = "ready"
         while not self.stop.is_set():
-            if not self._held(kb):
-                time.sleep(0.02)
-                continue
-            self.voice.hold.set()
-            self.state = "listening"
-            self.level = self.peak = 0.0
-            self._event(rc_ptt=True)
-            chunks = []
-
-            def on_audio(d, _frames, _t, _status):
-                chunks.append(d.copy())
-                lv = float(max(-d.min(), d.max())) if len(d) else 0.0
-                self.level = lv
-                if lv > self.peak:
-                    self.peak = lv
-
-            t0 = time.monotonic()
-            mic_error = None
             try:
-                with sd.InputStream(samplerate=16000, channels=1, dtype="float32",
-                                    device=_input_index(self.cfg.get("mic")), callback=on_audio):
-                    while self._held(kb) and time.monotonic() - t0 < 15:
-                        time.sleep(0.02)
+                if self._held(kb):
+                    self._clip(np, sd, kb, online)
+                else:
+                    if self._stream is None:
+                        self._ensure_stream(sd)
+                    time.sleep(0.02)
             except Exception as e:
-                mic_error = str(e)
-                self.log(f"Microphone error: {e}")
-                while self._held(kb):
-                    time.sleep(0.05)
-            finally:
-                self.voice.hold.clear()
+                self.state = "error"
+                self.log(f"Listener error: {type(e).__name__}: {e}")
+                time.sleep(1.0)
                 self.state = "ready"
-                self.level = 0.0
-                self._event(rc_ptt=False, rc_clip_s=time.monotonic() - t0)
-            if mic_error:
-                self._event(rc_fail=("mic", f"Microphone error: {mic_error[:90]}"))
-                continue
-            if not chunks:
-                self._event(rc_fail=("mic", "No sound came from the microphone. Check it in Settings."))
-                continue
-            audio = np.concatenate(chunks)[:, 0]
-            if len(audio) < 16000 * 0.4:
-                self._event(rc_fail=("mic", "Too short. Keep holding the button while you speak."))
-                continue
-            if self.peak < 0.01:
-                self._event(rc_fail=("mic", "Too quiet. Wrong microphone, or it's muted? Check Settings."))
-                continue
-            self._event(rc_mic=round(self.peak * 100))
-            text, engine, t1 = None, None, time.monotonic()
-            if self.model_name == "openai" and self._key() and time.monotonic() >= self._online_off_until:
+        self._close_stream()
+
+    def _clip(self, np, sd, kb, online):
+        """One push-to-talk press: record until release (or the cap), then transcribe."""
+        self.voice.hold.set()
+        self.state = "listening"
+        try:
+            api = self._ensure_stream(sd)
+        except Exception as e:
+            self.voice.hold.clear()
+            self.state = "ready"
+            self._event(rc_fail=("mic", f"Microphone error: {str(e)[:90]}"))
+            while self._held(kb):
+                time.sleep(0.05)
+            return
+        self._chunks = []
+        self.peak = 0.0
+        with_lock = getattr(self._preroll, "maxlen", 0)
+        self._event(rc_ptt=True, rc_api=api or "default", rc_preroll=with_lock)
+        t0 = time.monotonic()
+        while self._held(kb) and time.monotonic() - t0 < MAX_CLIP_S:
+            time.sleep(0.02)
+        held, chunks = time.monotonic() - t0, self._chunks
+        self.voice.hold.clear()
+        self.level = 0.0
+        self._event(rc_ptt=False, rc_clip_s=held)
+        self.state = "ready"
+        if not chunks and not self._preroll:
+            self._event(rc_fail=("mic", "No sound came from the microphone. Check it in Settings."))
+            return
+        clip = np.concatenate([np.concatenate(list(self._preroll))] + chunks) if chunks else \
+            np.concatenate(list(self._preroll))
+        audio = prep_speech(np, clip, self._rate or SPEECH_RATE, self.cfg.get("mic_gain", 1.0))
+        if audio is None or len(audio) < SPEECH_RATE * 0.25:
+            self._event(rc_fail=("mic", "Too short. Keep holding the button while you speak."))
+            return
+        if self.peak < MIN_PEAK:
+            self._event(rc_fail=("mic", "Too quiet. Wrong microphone, or it's muted? Check Settings."))
+            return
+        self._event(rc_mic=round(self.peak * 100))
+        self._heard(audio, "openai" if online and self._key() and time.monotonic() >= self._online_off_until else None)
+
+    def _heard(self, audio, online):
+        """Transcribe and hand the words over, with a second attempt when the first looks weak."""
+        text, engine, tries = "", "", []
+        t1 = time.monotonic()
+        if online:
+            try:
+                text, engine = self._transcribe_openai(audio), "OpenAI"
+            except Exception as e:
+                self._online_off_until = time.monotonic() + 120
+                self.log(f"OpenAI speech recognition failed ({type(e).__name__}: {str(e)[:90]}). "
+                         "Using the offline model for the next 2 minutes.")
+        if not text:
+            model = self._local_model()
+            if model is None:
+                self._event(rc_fail=("stt", "Speech model failed to load (see Log)."))
+                return
+            for argued in (False, True):
                 try:
-                    text, engine = self._transcribe_openai(audio), "OpenAI"
-                except Exception as e:
-                    self._online_off_until = time.monotonic() + 120
-                    self.log(f"OpenAI speech recognition failed ({type(e).__name__}: {e}). "
-                             "Using the offline model for the next 2 minutes.")
-            if text is None:
-                model = model or self._local_model()
-                if model is None:
-                    self._event(rc_fail=("stt", "Speech model failed to load (see Log)."))
-                    continue
-                try:
-                    segs, _ = model.transcribe(audio, language="en", beam_size=1, vad_filter=True,
-                                               condition_on_previous_text=False, no_speech_threshold=0.6,
-                                               initial_prompt=WHISPER_PROMPT)
-                    text = " ".join(s.text for s in segs).strip()
-                    engine = "Offline " + (self.model_name if self.model_name != "openai" else "small.en")
+                    segs, _ = model.transcribe(
+                        audio, language="en", beam_size=STT_BEAM, best_of=STT_BEAM if STT_BEAM > 1 else 1,
+                        condition_on_previous_text=False,
+                        length_penalty=1.15 if argued else 1.0,
+                        initial_prompt=WHISPER_PROMPT, hotwords=STT_HOTWORDS,
+                        without_timestamps=True, suppress_blank=True)
+                    got = " ".join(s.text for s in segs).strip()
+                except TypeError:
+                    segs, _ = model.transcribe(audio, language="en", beam_size=STT_BEAM,
+                                               condition_on_previous_text=False,
+                                               initial_prompt=WHISPER_PROMPT, without_timestamps=True)
+                    got = " ".join(s.text for s in segs).strip()
                 except Exception as e:
                     self.log(f"Transcription failed: {e}")
                     self._event(rc_fail=("stt", f"Transcription failed: {str(e)[:80]}"))
-                    continue
-            if text.lower().strip(" .!?") in HALLUCINATIONS or (len(text) > 25 and text.strip() in WHISPER_PROMPT):
-                self._event(rc_fail=("stt", "Didn't catch any words. Speak a little louder or closer."))
-                continue
-            self._event(rc_heard=text, rc_stt=f"{engine} · {time.monotonic() - t1:.1f} s")
-            self.log(f"DRIVER: {text}")
-            try:
-                self.on_text(text)
-            except Exception as e:
-                self.log(f"Couldn't answer that ({type(e).__name__}: {e})")
+                    return
+                tries.append(got)
+                text = stt_fallback(got) if argued else got
+                engine = "Offline " + (self.model_name if self.model_name != "openai" else
+                                       DEFAULT_CONFIG["whisper_model"])
+                if text and not _weak(text):
+                    break
+                if not text and argued:
+                    break                                         # twice empty: nothing more to find
+        text = tidy_speech(text)
+        if text.lower().strip(" .!?") in HALLUCINATIONS or (len(text) > 25 and text.strip() in WHISPER_PROMPT):
+            self._event(rc_fail=("stt", "Didn't catch any words. Speak a little louder or closer."))
+            return
+        self._event(rc_heard=text, rc_stt=f"{engine} · {time.monotonic() - t1:.1f} s")
+        self.log(f"DRIVER: {text}")
+        try:
+            self.on_text(text)
+        except Exception as e:
+            self.log(f"Couldn't answer that ({type(e).__name__}: {e})")
 
     def _event(self, **kw):
         if self.events is not None:
@@ -4404,7 +4615,193 @@ class Listener:
                 pass
 
 
+# The names of the things the commands are about. Whisper gets these wrong on a noisy headset mic ("apex"
+# comes back as "apex", "radius" or "apex"; "brake" as "break"); they are always put right.
+_WORD_FIX = {"apex": "apex", "rarity": "apex", "apex's": "apex", "break": "brake", "breaks": "brake",
+             "braking": "braking", "coat": "coach", "coats": "coach", "cone": "tone", "cones": "tones",
+             "tier": "tyre", "tyre": "tyre",
+             "tiers": "tyre", "delta": "delta", "setups": "setup", "sectors": "sector"}
+STT_CONFUSIONS = [
+    (re.compile(r"(?i)\bforeplays?\b"), "for please"), (re.compile(r"(?i)\bforeplace\b"), "for please"),
+    (re.compile(r"(?i)\bcleaves\b"), "please"), (re.compile(r"(?i)\bford? please\b"), "for please"),
+    (re.compile(r"(?i)\b(?:see|si) you easily\b"), "do you read me"),
+    (re.compile(r"(?i)\binspector (two|2)\b"), "in sector two"), (re.compile(r"(?i)\binsecta (two|2)\b"), "in sector two"),
+    (re.compile(r"(?i)\btwo times brake\b"), "into turn three"),
+    (re.compile(r"(?i)\bwhip the coats?\b"), "switch the coach"), (re.compile(r"(?i)\bflip the coats?\b"), "switch the coach"),
+    (re.compile(r"(?i)\bswitch the coats\b"), "switch the coach"), (re.compile(r"(?i)\bthe wheel is stepping\b"), "the rear is stepping"),
+    (re.compile(r"(?i)\bhow(?:'s| is) the tier\b"), "how's the tyre"),
+    (re.compile(r"(?i)\b(?:foreplay|foreplays|forplease)\b"), "for please"),
+    (re.compile(r"(?i)\b(?:walk|fuck|box) this lap\b"), "box this lap"),
+    (re.compile(r"(?i)\b(?:tank|team) (?:brake|10-?3|three)\b"), "turn three"),
+    (re.compile(r"(?i)\bin in (?:turn|two times)\b"), "in"),
+    (re.compile(r"(?i)\bat the decay\b"), "at the chicane"),
+]
+# Words that are ordinary English, so a weak decode can keep them (the radio says them, or the command
+# patterns need them).
+_ALLOWED = set("""a an and are as at be been box brake braking by can check coach could delta do does for from
+    gap get give has have hello hi how i if in into is it lap laps left map me my next of off on one or our
+    out please pit push radio rear repeat right sector setup should so still sure tell than that the their
+    then there these this three those time to too turn two tyre tyres under up us was way we well were what
+    when where which who why will with you your apex bias callouts carb temp temps test tyre""".split())
+_COMMAND_WORDS = {"box this lap", "brake bias", "brake markers", "callout", "coach", "coats", "radio check",
+                  "sector", "tyre temps", "understeer", "oversteer", "apex", "delta", "push", "repeat", "setup",
+                  "fuel", "tyres", "traction", "rotation", "rotation"}
+_NEXT_WORDS = {"left", "right", "up", "down", "map", "bias", "markers", "tones", "beeps", "on", "off", "ahead",
+               "behind", "two", "three", "four", "five", "six", "seven", "eight", "level", "check", "this",
+               "lap", "now", "please", "more", "less"}
+_WORD_RE = re.compile(r"[a-z]+(?:'[a-z]+)?", re.I)
 
+
+def _weak(text):
+    """A decode worth trying again and cleaning up: one short word, or words the radio never uses."""
+    words = re.findall(r"[a-z']+", text.lower())
+    return len(words) < 2 or bool(set(words) & {"foreplace", "foreplays", "cleaves", "inspector", "coats"})
+
+
+def _fix_one(m, w, prev, nxt):
+    n = w.lower()
+    if n in _NEXT_WORDS and prev not in _COMMAND_WORDS:
+        return True                                   # "apex and" / "delta", but not "gap two" alone
+    if n in _COMMAND_WORDS:
+        return m.group(0)[0].isupper() or prev not in _COMMAND_WORDS
+    # a word only gets a fix when the radio has no use for the one Whisper returned ("coat", "cone")
+    return w not in _ALLOWED
+
+
+def _fix_words(t):
+    """Put right the command words Whisper got wrong, in place. "box", "brake", "apex" and the other names of
+    the commands are always corrected; anything else only where it could not belong."""
+    out, idx = [], 0
+    for m in _WORD_RE.finditer(t):
+        out.append(t[idx:m.start()])
+        prev, nxt = None, None
+        for p in reversed(out):
+            pm = _WORD_RE.search(p[::-1])
+            if pm:
+                prev = pm.group(0)[::-1].lower()
+                break
+        nm = _WORD_RE.search(t, m.end())
+        nxt = nm.group(0).lower() if nm else None
+        w = m.group(0)
+        out.append(_WORD_FIX[w.lower()] if _fix_one(m, w, prev, nxt) and w.lower() in _WORD_FIX else w)
+        idx = m.end()
+    out.append(t[idx:])
+    return "".join(out)
+
+
+def stt_fallback(text):
+    """Second-chance cleanup of a weak decode: the command words it stands a good chance of having mangled,
+    then the phrase fixes above."""
+    t = _fix_words(text)
+    for rx, rep in STT_CONFUSIONS:
+        t = rx.sub(rep, t)
+    t = re.sub(r"(?i)\bin (?:two times brake|to turn|at turn|turn) (two|2)\b", r"into turn \1", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _strip_slow(np, x, rate):
+    """Remove DC and handling rumble, then the low-mid mud that garbles consonants on a headset mic."""
+    x = x - float(x.mean())
+    if rate <= 12000:
+        return x
+    n = max(3, int(rate * 0.02) | 1)
+    slow = np.convolve(x, np.ones(n, np.float32) / n, mode="same")
+    hp = (x - slow).astype(np.float32)                       # ~50 Hz and below is gone
+    n2 = max(3, int(rate * 0.005) | 1)
+    mud = np.convolve(hp, np.ones(n2, np.float32) / n2, mode="same")
+    return (hp - 0.5 * mud).astype(np.float32)
+
+
+def _resample(np, x, rate, want):
+    if rate == want or not len(x):
+        return x.astype(np.float32)
+    n = max(1, int(round(len(x) * want / float(rate))))
+    return np.interp(np.arange(n, dtype=np.float32) * (rate / float(want)), np.arange(len(x)),
+                     x).astype(np.float32)
+
+
+def prep_speech(np, clip, rate, gain=1.0):
+    """Turn a raw mic clip into the 16 kHz mono signal the recogniser wants: rumble and mud removed, a
+    noise gate against sim noise and fan hiss, level normalised, and short silence padded around it."""
+    x = np.asarray(clip, dtype=np.float32).ravel()
+    if not len(x):
+        return None
+    x = _strip_slow(np, x, rate)
+    if rate <= 6000:
+        x = _resample(np, x, rate, rate * 2)                 # thin bluetooth line-out
+        rate *= 2
+    peak = float(np.abs(x).max())
+    if peak < 0.000005:                                      # a silent press, not a mic that is merely quiet
+        return None
+    # Lift a quiet mic to a useful level by peak, so a clip's own background noise is not blown up with it.
+    # (The cap only stops a single stray sample turning fan hiss into full scale.)
+    x = x * (min(4000.0, max(1.0, 0.85 / peak)) * float(gain or 1.0))
+    rms = float(np.sqrt(np.mean(x * x)) + 1e-9)
+    floor = max(rms * 0.6, 0.5 / 32768)                       # gate: hiss under six tenths of speech level
+    hop = 160
+    frames = len(x) // hop
+    if frames:
+        w = x[:frames * hop].reshape(frames, hop)
+        gr = np.clip((np.sqrt(np.mean(w * w, axis=1)) / floor - 0.35) / 0.65, 0.0, 1.0)
+        gr = np.convolve(gr, np.ones(5, np.float32) / 5, mode="same")   # smooth the gate's opening
+        x[:frames * hop] *= np.repeat(gr, hop)
+    x = _resample(np, x, rate, SPEECH_RATE)
+    x = np.clip(x / (float(np.percentile(np.abs(x), 99.5)) + 1e-6), -1.0, 1.0).astype(np.float32)
+    return np.concatenate([np.zeros(int(SPEECH_RATE * 0.3), np.float32), x,
+                           np.zeros(int(SPEECH_RATE * 0.3), np.float32)])
+
+
+_ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven",
+         "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
+_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+
+
+def _num_words(n):
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        return _TENS[n // 10] + ("" if n % 10 == 0 else "-" + _ONES[n % 10])
+    return str(n)
+
+
+def _spoken_nouns(text):
+    """Radio nouns Whisper turned into digits (turn 3, sector 2) back into words, so the spoken-number
+    commands keep matching, and the coach says them the way a driver does."""
+    keep = {"turn": "turn", "sector": "sector", "gear": "gear", "lap": "lap", "tyre": "tyre set",
+            "tyre set": "tyre set"}
+    words = text.split()
+    out = []
+    for i, w in enumerate(words):
+        prev = re.sub(r"[^\w ]", "", words[i - 1].lower()) if i else ""
+        if w.isdigit() and prev in keep:
+            out.extend(_num_words(int(w)).replace("-", " ").split())
+        elif w[:1].isdigit() and w[1:2] == "s" and prev in keep:
+            out.append(w)                                     # 3s, keep
+        else:
+            out.append(w)
+    return " ".join(out)
+
+
+def tidy_speech(text):
+    """Small clean-up of a transcript before the coach sees it."""
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    if not t:
+        return t
+    halves = [h for h in re.split(r"(?<=[.?!])\s+", t) if h]
+    deduped, seen = [], set()
+    for h in halves:
+        k = h.rstrip(" .?!,;").lower()
+        if k and k not in seen:
+            seen.add(k)
+            deduped.append(h)                                 # "radio check. radio check." said twice
+    if len(deduped) > 1:
+        t = " ".join(deduped)
+    t = re.sub(r"^(?:so|um+|uh+|er+)[, ]+", "", t, flags=re.I)
+    try:
+        t = _spoken_nouns(t)
+    except Exception:
+        pass
+    return t[:1].upper() + t[1:]
 
 class Overlay:
     def __init__(self):
@@ -11556,6 +11953,9 @@ _LABEL_BY_VOICE = {v: n for n, v in VOICES}
 _WHISPER_NAMES = [n for n, _ in WHISPER_MODELS]
 _WHISPER_BY_LABEL = dict(WHISPER_MODELS)
 _LABEL_BY_WHISPER = {v: n for n, v in WHISPER_MODELS}
+_MIC_API_LABELS = [label for _, label in MIC_APIS]
+_MIC_API_BY_LABEL = {label: key for key, label in MIC_APIS}
+_LABEL_BY_MIC_API = {key: label for key, label in MIC_APIS}
 _UPDATES_BY_LABEL = dict(CREW_UPDATES)
 _CHATTER_BY_LABEL = dict(CREW_CHATTER)
 _LANGUAGE_BY_LABEL = dict(CREW_LANGUAGE)
@@ -13645,7 +14045,8 @@ class App:
         ttk.Label(head, text="Radio check", style="Sec.TLabel").pack(anchor="w")
         ttk.Label(head, style="Mut.TLabel", wraplength=1040, justify="left",
                   text="Works without a sim. Hold your push-to-talk (wheel button, F8 or the button below), speak, "
-                       "release. Each step turns green when it works. Try \u201cradio check\u201d (instant, no AI key needed), "
+                       "release. Start speaking as you press: half a second before the press is kept. Each step turns "
+                       "green when it works. Try \u201cradio check\u201d (instant, no AI key needed), "
                        "then a real question like \u201cwhat should I focus on in my first session?\u201d (uses your AI provider).").pack(anchor="w", pady=(4, 0))
         steps = self._card(t, fill="x")
         self.rc_dots, self.rc_info = {}, {}
@@ -13737,8 +14138,12 @@ class App:
         """Radio-check updates from the listener, the conversation and the voice (all on the UI thread here)."""
         t = kw.get("rc_t", time.monotonic())
         if kw.get("rc_ptt") is True:
-            self._rc_set("ptt", "ok", "Pressed ✓")
-            self._rc_set("mic", "busy", "Listening…")
+            api = {"wasapi": "WASAPI", "directsound": "DirectSound", "mme": "MME",
+                   "wdm": "WDM-KS"}.get(kw.get("rc_api"))
+            pre = kw.get("rc_preroll") or 0
+            self._rc_set("ptt", "ok", "Pressed ✓" + (f" · {api}" if api else ""))
+            self._rc_set("mic", "busy", f"Listening… {pre * 1024 / SPEECH_RATE:.1f} s pre-roll" if pre
+                         else "Listening…")
             for k in ("stt", "ai", "voice"):
                 self._rc_set(k, "idle")
         elif kw.get("rc_ptt") is False:
@@ -13841,9 +14246,15 @@ class App:
         self.vars["mic"] = tk.StringVar(value=self.cfg.get("mic") or "Windows default")
         self.mic_combo = ttk.Combobox(g, textvariable=self.vars["mic"], values=["Windows default"], state="readonly", width=28)
         row(g, 5, "Microphone", self.mic_combo)
+        self.vars["mic_api"] = tk.StringVar(value=_LABEL_BY_MIC_API.get(self.cfg.get("mic_api"), _MIC_API_LABELS[0]))
+        row(g, 6, "Mic input", ttk.Combobox(g, textvariable=self.vars["mic_api"], values=_MIC_API_LABELS,
+                                            state="readonly", width=28), "WASAPI is the clearest")
+        self.vars["mic_gain"] = tk.DoubleVar(value=float(self.cfg.get("mic_gain", 1.0)))
+        row(g, 7, "Mic boost", ttk.Scale(g, from_=0.5, to=3.0, variable=self.vars["mic_gain"], length=200),
+            "quiet headset: raise it")
         mnames = _WHISPER_NAMES
-        self.vars["whisper_model"] = tk.StringVar(value=_LABEL_BY_WHISPER.get(self.cfg.get("whisper_model"), mnames[1]))
-        row(g, 6, "Speech recognition", ttk.Combobox(g, textvariable=self.vars["whisper_model"], values=mnames,
+        self.vars["whisper_model"] = tk.StringVar(value=_LABEL_BY_WHISPER.get(self.cfg.get("whisper_model"), mnames[0]))
+        row(g, 8, "Speech recognition", ttk.Combobox(g, textvariable=self.vars["whisper_model"], values=mnames,
                                                      state="readonly", width=28))
         b = ttk.Frame(a, style="Card.TFrame")
         b.pack(fill="x", pady=(8, 0))
@@ -14982,9 +15393,11 @@ class App:
         """Start (or restart, after a model change) the push-to-talk listener. Independent of coaching."""
         if not self.mic_on:
             return
-        if self.listener is None or self.listener.model_name != self.cfg.get("whisper_model"):
+        want = (self.cfg.get("whisper_model"), self.cfg.get("mic"), self.cfg.get("mic_api"))
+        if self.listener is None or self.listener.sig != want:
             if self.listener is not None:
                 self.listener.stop.set()
+                self.listener = None
             self.listener = Listener(self.cfg, self.voice, self.controls, self.conv.handle, log=self.log,
                                      events=self.post)
 
@@ -15064,7 +15477,7 @@ class App:
     def refresh_devices(self):
         def work():
             outs = self.voice.list_outputs()
-            mics = list_input_devices()
+            mics = list_input_devices(self.cfg)
             self.post(devices=(outs, mics))
         threading.Thread(target=work, daemon=True).start()
 
@@ -15127,7 +15540,7 @@ class App:
         out = v["audio_out"].get()
         self.cfg["audio_out"] = "" if out == "Windows default" else out
         mic = v["mic"].get()
-        self.cfg["mic"] = "" if mic == "Windows default" else mic
+        self.cfg["mic"] = "" if mic in ("", "Windows default") else _live_mic(mic)
         self.cfg["talk_level"] = self.talk_pref = int(v["talk_level"].get())
         self.cfg["coach_personality"] = _PERSONALITY_BY_LABEL.get(v["coach_personality"].get(), DEFAULT_CONFIG["coach_personality"])
         self.cfg["brake_callouts"] = v["brake_callouts"].get()
@@ -15149,6 +15562,8 @@ class App:
         self.cfg["check_updates"] = bool(v["check_updates"].get())
         _UDPPort.share = self.cfg["udp_share_simhub"]
         self.cfg["whisper_model"] = _WHISPER_BY_LABEL.get(v["whisper_model"].get(), "small.en")
+        self.cfg["mic_api"] = _MIC_API_BY_LABEL.get(v["mic_api"].get(), "auto")
+        self.cfg["mic_gain"] = round(float(v["mic_gain"].get()), 2)
         self.cfg["ai_provider"] = _AI_BY_LABEL.get(v["ai_provider"].get(), "openai")
         self.cfg["ai_fallback"] = bool(v["ai_fallback"].get())
         for pid in AI_PROVIDERS:
