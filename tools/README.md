@@ -35,6 +35,7 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_benchmarks | benchmark lap times by sim / class / car: selection, starter-lap tuning, target announcements, library file |
 | test_library_tracks | starter-lap track shapes from the library: checks, download, use, removal |
 | test_library_sync | automatic library import: new / changed / unchanged / bad files, own laps kept, live adoption |
+| test_simcast_link / test_kokoro_share | SimCast link packets (frozen v1 bytes); Kokoro model reused from SimCast's folder |
 | test_session_repeat / test_lap_talk | once-a-day briefing, skip / full briefing; short debriefs, fair coaching |
 | reference library files | every lap in `references/` is valid (`tools/references/check_library.py`) |
 | net_test_update_check | update check, installer download (`--network`) |
@@ -57,6 +58,10 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 ## Installer helpers
 
 - `installer-source/simcoach.nsi` is the wizard; `installer-source/install.ps1` the setup steps it runs.
+- The wizard's optional *SimCast* component (step `simcast` in install.ps1) downloads SimCast's latest
+  `SimCast-Setup.exe`, checks it against the SHA-256 digest GitHub publishes for the release asset and runs it
+  with `/S`. SimCast's wizard does the same for SimCoach, so keep the asset name `SimCoach-Setup.exe`.
+- `docs/simcast-link.md` is the SimCoach → SimCast ducking protocol; read it before changing `SimCastLink`.
 - `7z l SimCoach-Setup.exe` lists the files inside an installer (`7z x` extracts them).
 - `installer/set_exe_icon.py SimCoach.exe SimCoach.ico` puts a new icon into the launcher (pip install pefile).
   The icon's source is `installer-source/art/icon-512.png`; make SimCoach.ico from it (16-256 px) first.

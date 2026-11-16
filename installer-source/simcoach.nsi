@@ -1,7 +1,7 @@
 ; SimCoach setup wizard (NSIS 3, Modern UI 2). Installs for the current Windows user, no admin rights needed.
 ; Built by tools/installer/build_installer.sh, which passes VERSION (e.g. 6.11.1) and VIVERSION (6.11.1.0) and runs
 ; makensis in a folder holding this script, art\, LICENSE.txt and the app files.
-; /S installs silently with every part (no pages, SimCoach isn't started afterwards).
+; /S installs silently with every part except SimCast (no pages, SimCoach isn't started afterwards).
 
 Unicode true
 SetCompressor /SOLID lzma
@@ -18,6 +18,7 @@ ManifestDPIAware true
 !define APP "SimCoach"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\SimCoach"
 !define UNINSTALLER "Uninstall SimCoach.exe"
+!define SIMCAST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\SimCast"
 !define PS '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass'
 
 Name "${APP}"
@@ -44,6 +45,7 @@ VIAddVersionKey "LegalCopyright" "MIT License"
 
 Var Partial
 Var FinishText
+Var SimCastResult       ; "" not asked for, "ok" installed, "failed" didn't install
 
 !define MUI_ICON "SimCoach.ico"
 !define MUI_UNICON "SimCoach.ico"
@@ -59,7 +61,8 @@ Var FinishText
 !define MUI_WELCOMEPAGE_TEXT "SimCoach is a live voice coach and race crew for sim racing: braking calls, \
 corner-by-corner coaching, and an engineer, strategist and spotter on the radio.$\r$\n$\r$\n\
 Setup installs it for your Windows account (no admin rights needed), then downloads Python, SimCoach's \
-packages and the offline speech recognition: about 1 GB, a few minutes. Keep the internet on.$\r$\n$\r$\n\
+packages and the offline speech recognition: about 1 GB, a few minutes (less if SimCast is already \
+installed: they share Python and packages). Keep the internet on.$\r$\n$\r$\n\
 Already using SimCoach? Your reference laps, settings and reports are kept, and a SimCoach that's running is \
 closed first (its session is saved).$\r$\n$\r$\nClick Next to continue."
 !insertmacro MUI_PAGE_WELCOME
@@ -161,6 +164,18 @@ Section "Start menu shortcut" SecStart
     "SimCoach - live voice coach for sim racing"
 SectionEnd
 
+Section /o "SimCast: TV commentary for your race" SecSimCast
+  AddSize 400000
+  DetailPrint "Getting SimCast from GitHub (its own installer, run silently)..."
+  nsExec::ExecToLog '${PS} -File "$INSTDIR\install.ps1" -Dest "$INSTDIR" -Step simcast'
+  Pop $0
+  ${If} $0 == 0
+    StrCpy $SimCastResult "ok"
+  ${Else}
+    StrCpy $SimCastResult "failed"
+  ${EndIf}
+SectionEnd
+
 Section "-finish"
   SetShellVarContext current
   ; a shortcut left unticked on an update is removed, so the choice sticks
@@ -177,6 +192,13 @@ first time it starts (keep the internet on). Details: install.log in the SimCoac
     StrCpy $FinishText "SimCoach is ready. Start it, press Start coaching, then drive in any supported sim.$\r$\n$\r$\n\
 Using Assetto Corsa with Custom Shaders Patch? Restart the game once so it loads SimCoach's helper."
   ${EndIf}
+  ${If} $SimCastResult == "ok"
+    StrCpy $FinishText "$FinishText$\r$\n$\r$\nSimCast is installed too (Start menu). Run them together and its \
+booth drops under the coach while the coach talks."
+  ${ElseIf} $SimCastResult == "failed"
+    StrCpy $FinishText "$FinishText$\r$\n$\r$\nSimCast couldn't be installed (details in install.log). Get it \
+from github.com/Jcedwar61/SimCast."
+  ${EndIf}
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
@@ -185,10 +207,19 @@ SectionEnd
 recognition, downloaded now (about 1 GB) so the first start is quick (required)."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A SimCoach icon on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecStart} "SimCoach in the Start menu."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecSimCast} "Also install SimCast, a separate app: a TV commentary booth \
+that calls your whole race and drops under the coach while it talks. Downloads its latest release from GitHub; \
+it uses the same Python and packages, so it adds little."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Function .onInit
   StrCpy $Partial 0
+  StrCpy $SimCastResult ""
+  ; SimCast already on this PC: offer to bring it up to its latest release instead (still unticked)
+  ReadRegStr $0 HKCU "${SIMCAST_KEY}" "DisplayVersion"
+  ${If} $0 != ""
+    SectionSetText ${SecSimCast} "Update SimCast ($0 installed)"
+  ${EndIf}
 FunctionEnd
 
 ; ---------------------------------------------------------------------------------------------------------------

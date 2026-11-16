@@ -3,10 +3,12 @@
 #   -Step close   close a SimCoach running from the install folder (its session is saved first)
 #   -Step uv      find or download uv, which runs SimCoach with its own Python
 #   -Step parts   Python 3.12, SimCoach's packages and the offline speech recognition
+#   -Step simcast SimCast (the TV commentary app), if ticked: its latest setup wizard from GitHub, checked against
+#                 the SHA-256 GitHub publishes for it, run silently
 # Exit codes: 0 = done, 2 = didn't finish (SimCoach finishes it on first launch), 1 = failed.
 # 'parts' also leaves setup-ready.txt in the install folder when it really finished: the wizard checks for that file
 # rather than trusting an exit code (a blocked or missing PowerShell can look like success).
-param([string]$Dest = $PSScriptRoot, [ValidateSet('close', 'uv', 'parts')][string]$Step = 'parts')
+param([string]$Dest = $PSScriptRoot, [ValidateSet('close', 'uv', 'parts', 'simcast')][string]$Step = 'parts')
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -104,6 +106,35 @@ try {
             Pop-Location
             if ($code -eq 0) { Set-Content -Path (Join-Path $Dest 'setup-ready.txt') -Value 'ok'; Say 'Ready.'; exit 0 }
             Say "Stopped (code $code); SimCoach finishes this the first time it starts."
+            exit 2
+        }
+        'simcast' {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $rel = Invoke-RestMethod -UseBasicParsing -Headers @{ 'User-Agent' = 'SimCoach-Setup' } `
+                -Uri 'https://api.github.com/repos/Jcedwar61/SimCast/releases/latest'
+            $asset = @($rel.assets | Where-Object { $_.name -eq 'SimCast-Setup.exe' })[0]
+            $want = if ($asset) { "$($asset.digest)" -replace '^sha256:', '' } else { '' }
+            if (-not $asset -or $want -notmatch '^[0-9a-fA-F]{64}$') {
+                Say "SimCast $($rel.tag_name) has no setup wizard with a checksum to install from; get it from github.com/Jcedwar61/SimCast."
+                exit 2
+            }
+            $exe = Join-Path $env:TEMP 'SimCast-Setup.exe'
+            Say "Downloading SimCast $($rel.tag_name) ..."
+            Invoke-WebRequest -UseBasicParsing -Uri $asset.browser_download_url -OutFile $exe
+            $got = (Get-FileHash -Algorithm SHA256 -Path $exe).Hash
+            if ($got -ne $want.ToUpper()) {
+                Remove-Item $exe -Force -ErrorAction SilentlyContinue
+                Say 'The SimCast download did not match its published checksum, so it was not run.'
+                exit 2
+            }
+            Say 'Installing SimCast, with its Python packages (shared with SimCoach, so this is quick) ...'
+            $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
+            Remove-Item $exe -Force -ErrorAction SilentlyContinue
+            if ($p.ExitCode -eq 0 -and (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SimCast')) {
+                Say "SimCast $($rel.tag_name) is installed."
+                exit 0
+            }
+            Say "SimCast's setup stopped (code $($p.ExitCode)); get it from github.com/Jcedwar61/SimCast."
             exit 2
         }
     }
