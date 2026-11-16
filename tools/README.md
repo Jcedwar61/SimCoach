@@ -35,6 +35,7 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_benchmarks | benchmark lap times by sim / class / car: selection, starter-lap tuning, target announcements, library file |
 | test_library_tracks | starter-lap track shapes from the library: checks, download, use, removal |
 | test_library_sync | automatic library import: new / changed / unchanged / bad files, own laps kept, live adoption |
+| test_simcast_link / test_kokoro_share | SimCast link packets (frozen v1 bytes); Kokoro model reused from SimCast's folder |
 | test_session_repeat / test_lap_talk | once-a-day briefing, skip / full briefing; short debriefs, fair coaching |
 | reference library files | every lap in `references/` is valid (`tools/references/check_library.py`) |
 | net_test_update_check | update check, installer download (`--network`) |
@@ -49,14 +50,22 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
    p7zip-full`; works from Linux), taking the version from sim_coach.py, and checks every file inside matches
    the repo. `tools/installer/wine_check.sh` runs it under Wine and screenshots every page (`apt install wine
    wine32:i386 xvfb xdotool imagemagick`).
-4. Merge to main, then `tools/release/make_zip.sh` writes `dist/SimCoach-v6.4-release.zip` from origin/main.
-5. Publish the GitHub release: tag `v6.4` on main, attach **SimCoach-Setup.exe** (exactly this name: installed
-   copies' update check looks for it) and the zip.
+4. Merge to main, then publish: **Actions > Release > Run workflow** (`.github/workflows/release.yml`). It tags
+   `v6.4` on main, builds the release zip (`tools/release/make_zip.sh`, which also checks the installer carries
+   main's sim_coach.py) and publishes the GitHub release with **SimCoach-Setup.exe** and the zip attached, using
+   README.md's "What's new in 6.4" section as the notes. It refuses a version that's already released.
+5. By hand instead: `tools/release/make_zip.sh` writes `dist/SimCoach-v6.4-release.zip` from origin/main; tag
+   `v6.4` on main and attach **SimCoach-Setup.exe** (exactly this name: installed copies' update check and SimCast's
+   setup wizard look for it) and the zip.
    Pre-filled: `https://github.com/Jcedwar61/SimCoach/releases/new?tag=v6.4&target=main&title=SimCoach%20v6.4`
 
 ## Installer helpers
 
 - `installer-source/simcoach.nsi` is the wizard; `installer-source/install.ps1` the setup steps it runs.
+- The wizard's optional *SimCast* component (step `simcast` in install.ps1) downloads SimCast's latest
+  `SimCast-Setup.exe`, checks it against the SHA-256 digest GitHub publishes for the release asset and runs it
+  with `/S`. SimCast's wizard does the same for SimCoach, so keep the asset name `SimCoach-Setup.exe`.
+- `docs/simcast-link.md` is the SimCoach → SimCast ducking protocol; read it before changing `SimCastLink`.
 - `7z l SimCoach-Setup.exe` lists the files inside an installer (`7z x` extracts them).
 - `installer/set_exe_icon.py SimCoach.exe SimCoach.ico` puts a new icon into the launcher (pip install pefile).
   The icon's source is `installer-source/art/icon-512.png`; make SimCoach.ico from it (16-256 px) first.

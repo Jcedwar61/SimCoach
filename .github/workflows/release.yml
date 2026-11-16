@@ -1,0 +1,48 @@
+# Publishes a SimCoach release from main: tag vX.Y (APP_VERSION in sim_coach.py), with SimCoach-Setup.exe and the
+# release zip attached and the README's "What's new in X.Y" section as the notes. Run it by hand (Actions > Release >
+# Run workflow) after the release commit is on main. It refuses to run if that version is already released, or if
+# the committed installer doesn't carry main's sim_coach.py. Installed copies find the release through their update
+# check, which looks for an asset named exactly SimCoach-Setup.exe.
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Version and notes
+        id: v
+        run: |
+          VER="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' sim_coach.py)"
+          [ -n "$VER" ] || { echo "APP_VERSION not found"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VER" >/dev/null; then
+            echo "v$VER is already tagged: set the next version first (tools/installer/set_version.py)."; exit 1
+          fi
+          awk -v h="### What's new in $VER" '$0==h{on=1;next} on&&/^### /{exit} on{print}' README.md | tr -d '\r' > notes.md
+          [ -s notes.md ] || { echo "README.md has no \"What's new in $VER\" section"; exit 1; }
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+      - name: Release zip (checks the installer carries this sim_coach.py)
+        run: |
+          sudo apt-get install -y p7zip-full zip >/dev/null
+          tools/release/make_zip.sh HEAD "dist/SimCoach-v${{ steps.v.outputs.ver }}-release.zip"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${{ steps.v.outputs.ver }}"
+          gh release create "v$VER" SimCoach-Setup.exe "dist/SimCoach-v$VER-release.zip" \
+            --target "$(git rev-parse HEAD)" --title "SimCoach v$VER" --notes-file notes.md --latest
