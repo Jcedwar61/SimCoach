@@ -1,0 +1,69 @@
+# Tests the setup wizard on real Windows whenever the installer or the app changes: install.ps1 parses in Windows
+# PowerShell 5.1, SimCoach-Setup.exe installs silently and finishes its downloads, the optional SimCast step
+# installs SimCast from its latest release (checksum-checked), and both uninstall cleanly.
+name: Installer (Windows)
+
+on:
+  pull_request:
+    paths: ["installer-source/**", "SimCoach-Setup.exe", "SimCoach.exe", "sim_coach.py", ".github/workflows/installer-windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v5
+      - name: install.ps1 parses in Windows PowerShell 5.1
+        run: |
+          $tokens = $null; $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\installer-source\install.ps1", [ref]$tokens, [ref]$errs)
+          if ($errs) { $errs | ForEach-Object { Write-Host $_ }; exit 1 }
+          "PowerShell $($PSVersionTable.PSVersion): install.ps1 parses"
+      - name: Silent install (Python, packages, speech recognition)
+        run: |
+          $p = Start-Process -FilePath .\SimCoach-Setup.exe -ArgumentList '/S' -Wait -PassThru
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SimCoach'
+          if (-not (Test-Path $key)) { "No uninstall entry (exit code $($p.ExitCode))"; exit 1 }
+          $inst = (Get-ItemProperty $key).InstallLocation
+          "Installed to $inst (exit code $($p.ExitCode))"
+          Get-Content "$inst\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 40
+          foreach ($f in 'sim_coach.py', 'SimCoach.exe', 'install.ps1', 'Uninstall SimCoach.exe') {
+            if (-not (Test-Path "$inst\$f")) { "Missing $f"; exit 1 }
+          }
+          if (-not (Select-String -Path "$inst\install.log" -Pattern 'Ready\.' -Quiet)) { 'The downloads did not finish'; exit 1 }
+          if (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SimCast') { 'A silent install must not install SimCast'; exit 1 }
+          "INST=$inst" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: The SimCast option installs SimCast (latest release, checksum-checked)
+        run: |
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$env:INST\install.ps1" -Dest "$env:INST" -Step simcast
+          $code = $LASTEXITCODE
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SimCast'
+          if ($code -ne 0 -or -not (Test-Path $key)) { "Step simcast failed (exit code $code)"; exit 1 }
+          $cast = (Get-ItemProperty $key).InstallLocation
+          "SimCast $((Get-ItemProperty $key).DisplayVersion) installed to $cast"
+          Get-Content "$cast\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 20
+          foreach ($f in 'sim_cast.py', 'SimCast.exe', 'simcast\app.py', 'setup-ready.txt') {
+            if (-not (Test-Path "$cast\$f")) { "SimCast: missing $f"; exit 1 }
+          }
+      - name: Both uninstall cleanly
+        run: |
+          foreach ($app in 'SimCast', 'SimCoach') {
+            $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$app"
+            $inst = (Get-ItemProperty $key).InstallLocation
+            # NSIS uninstallers copy themselves to TEMP and return at once unless told where they are
+            $p = Start-Process -FilePath "$inst\Uninstall $app.exe" -ArgumentList '/S', "_?=$inst" -Wait -PassThru
+            if (Test-Path $key) { "$app is still registered after uninstalling (exit code $($p.ExitCode))"; exit 1 }
+            if (Test-Path "$inst\$($app.ToLower().Replace('simc', 'sim_c')).py") { "$app's files are still there"; exit 1 }
+            "$app uninstalled"
+          }
