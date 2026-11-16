@@ -69,7 +69,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.14"
+APP_VERSION = "6.15"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -3521,6 +3521,27 @@ class Voice:
         kdir = os.path.join(APP_DIR, "kokoro")
         return kdir, os.path.join(kdir, "kokoro-v1.0.int8.onnx"), os.path.join(kdir, "voices-v1.0.bin")
 
+    def _kokoro_borrow(self, dst, tmp):
+        """SimCast uses the same Kokoro model files. If it already downloaded them, hard-link (or copy) its copy
+        instead of downloading ~115 MB again. Each app keeps its own name for the file, so uninstalling or clearing
+        one never breaks the other. True if `tmp` now holds the file."""
+        name = os.path.basename(dst)
+        src = os.path.join(os.path.dirname(APP_DIR), "SimCast", "kokoro", name)
+        try:
+            if os.path.getsize(src) < self._KOKORO_MIN[name]:
+                return False
+        except OSError:
+            return False
+        try:
+            os.link(src, tmp)
+        except OSError:
+            try:
+                shutil.copyfile(src, tmp)
+            except OSError:
+                return False
+        self.log(f"Kokoro: using SimCast's copy of {name} (no download needed).")
+        return True
+
     def _kokoro_download(self):
         """Fetch the Kokoro model in the background (~115 MB, first use only). Speech carries on in the Microsoft
         voice meanwhile instead of the whole crew going silent while it downloads."""
@@ -3533,9 +3554,12 @@ class Voice:
                 if os.path.exists(dst):
                     continue
                 tmp = f"{dst}.part"
-                req = urllib.request.Request(url, headers={"User-Agent": "SimCoach/1.0"})
-                with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as out:
-                    shutil.copyfileobj(resp, out)
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                if not self._kokoro_borrow(dst, tmp):
+                    req = urllib.request.Request(url, headers={"User-Agent": "SimCoach/1.0"})
+                    with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as out:
+                        shutil.copyfileobj(resp, out)
                 if os.path.getsize(tmp) < self._KOKORO_MIN[os.path.basename(dst)]:
                     os.remove(tmp)
                     raise RuntimeError(f"download of {os.path.basename(dst)} was incomplete")
@@ -4000,9 +4024,12 @@ class SimCastLink:
     """Lets SimCast (the TV commentary app) run alongside without talking over the coach. While the coach or crew
     can be heard (a line or a braking tone), this sends SimCast a tiny "talking" packet on this PC every 100 ms, and
     "quiet" when it stops; SimCast lowers its booth under the coach and brings it back up after. Nothing leaves the
-    PC, and with SimCast closed the packets simply go nowhere."""
+    PC, and with SimCast closed the packets simply go nowhere.
 
-    TALK, QUIET = b"SIMCOACH-VOICE 1 talk", b"SIMCOACH-VOICE 1 quiet"
+    The wire format is a contract between two apps released separately: see docs/simcast-link.md before changing
+    anything here. SimCast 1.1-1.3 accept exactly these two messages, byte for byte, so they stay as they are."""
+
+    TALK, QUIET = b"SIMCOACH-VOICE 1 talk", b"SIMCOACH-VOICE 1 quiet"     # frozen: link version 1
     EVERY, HEARTBEAT = 0.1, 2.0
 
     def __init__(self, voice, port=SIMCAST_LINK_PORT, start=True):

@@ -24,6 +24,9 @@ def got():
 
 
 check(sc.SIMCAST_LINK_PORT == 47317 and v.link is link, "the link is on the port SimCast listens on")
+# docs/simcast-link.md rule 1: SimCast 1.1-1.3 compare whole datagrams, so these bytes must never change
+check(link.TALK == b"SIMCOACH-VOICE 1 talk" and link.QUIET == b"SIMCOACH-VOICE 1 quiet",
+      "link version 1 messages unchanged (older SimCasts accept nothing else)")
 link.step()
 check(got() == [link.QUIET], "quiet heartbeat while nothing plays")
 link.step()
