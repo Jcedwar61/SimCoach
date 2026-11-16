@@ -12,6 +12,9 @@ Quick start & installation (Windows 10 / 11)
       SimCoach's packages, and offline speech recognition (about 1 GB, a few minutes) so the first launch
       opens straight away. If a download doesn't finish, the last page says so and SimCoach finishes it the
       first time it starts. Silent install: SimCoach-Setup.exe /S.
+    * Optional: tick "SimCast: TV commentary for your race" and setup also installs SimCast, a separate
+      app (github.com/Jcedwar61/SimCast), from its latest GitHub release, checked against the published
+      checksum. It shares SimCoach's Python, packages and Kokoro voice model. A silent install leaves it out.
     * Because the installer isn't code-signed, Windows SmartScreen may show "Windows protected your PC":
       click "More info", then "Run anyway".
     * Updating: run a newer SimCoach-Setup.exe over the top (it closes any running SimCoach first and saves

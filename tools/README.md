@@ -50,9 +50,13 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
    p7zip-full`; works from Linux), taking the version from sim_coach.py, and checks every file inside matches
    the repo. `tools/installer/wine_check.sh` runs it under Wine and screenshots every page (`apt install wine
    wine32:i386 xvfb xdotool imagemagick`).
-4. Merge to main, then `tools/release/make_zip.sh` writes `dist/SimCoach-v6.4-release.zip` from origin/main.
-5. Publish the GitHub release: tag `v6.4` on main, attach **SimCoach-Setup.exe** (exactly this name: installed
-   copies' update check looks for it) and the zip.
+4. Merge to main, then publish: **Actions > Release > Run workflow** (`.github/workflows/release.yml`). It tags
+   `v6.4` on main, builds the release zip (`tools/release/make_zip.sh`, which also checks the installer carries
+   main's sim_coach.py) and publishes the GitHub release with **SimCoach-Setup.exe** and the zip attached, using
+   README.md's "What's new in 6.4" section as the notes. It refuses a version that's already released.
+5. By hand instead: `tools/release/make_zip.sh` writes `dist/SimCoach-v6.4-release.zip` from origin/main; tag
+   `v6.4` on main and attach **SimCoach-Setup.exe** (exactly this name: installed copies' update check and SimCast's
+   setup wizard look for it) and the zip.
    Pre-filled: `https://github.com/Jcedwar61/SimCoach/releases/new?tag=v6.4&target=main&title=SimCoach%20v6.4`
 
 ## Installer helpers

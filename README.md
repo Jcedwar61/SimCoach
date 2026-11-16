@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.14)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.15)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 * ### Quick setup
@@ -32,6 +32,11 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Works with SimCast:** run [SimCast](https://github.com/Jcedwar61/SimCast)'s TV commentary at the same time and its booth drops under the coach and crew while they talk, then comes back up.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.15
+* **SimCast from the setup wizard:** SimCoach-Setup.exe has a new option, *SimCast: TV commentary for your race* (unticked). Tick it and setup also installs the latest [SimCast](https://github.com/Jcedwar61/SimCast), downloaded from its GitHub release and checked against the published SHA-256 before it runs. With SimCast already installed, the option offers to update it instead. The two stay separate apps with their own updates and uninstallers.
+* **One voice model for both:** SimCoach and SimCast already shared Python and their packages; now they share the Kokoro voice model too. If SimCast has downloaded it (about 115 MB), SimCoach uses that copy instead of downloading it again, and the other way round.
+* **A written contract for the SimCast link:** [docs/simcast-link.md](docs/simcast-link.md) sets out the messages SimCoach sends while the coach talks and how they may change, so any SimCoach keeps working with any SimCast. Nothing changes on the wire.
 
 ### What's new in 6.14
 * **Push-to-talk you can trust.** Speech recognition is rebuilt. The microphone now runs all the time, so the half second *before* you press is already recorded and nothing at the front of a sentence is lost. The clip is cleaned (DC and handling rumble removed, speech band passed, a noise gate against fan and sim noise, level normalised) and decoded with radio bias words, so "box this lap", "sector two" and "brake bias" come back as words instead of guesses; a thin result is decoded a second way before anything reaches the coach. On test clips the word error rate fell from 5.8% to 0.8% clean and from 11.9% to 6.8% on a noisy headset mic, at roughly half the delay.
