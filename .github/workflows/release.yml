@@ -38,7 +38,7 @@ jobs:
       - name: Release zip (checks the installer carries this sim_coach.py)
         run: |
           sudo apt-get install -y p7zip-full zip >/dev/null
-          tools/release/make_zip.sh HEAD "dist/SimCoach-v${{ steps.v.outputs.ver }}-release.zip"
+          tools/release/make_zip.sh HEAD "$PWD/dist/SimCoach-v${{ steps.v.outputs.ver }}-release.zip"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
