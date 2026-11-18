@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.15)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.16)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 * ### Quick setup
@@ -32,6 +32,9 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Works with SimCast:** run [SimCast](https://github.com/Jcedwar61/SimCast)'s TV commentary at the same time and its booth drops under the coach and crew while they talk, then comes back up.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.16
+* **New licence:** SimCoach is now licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) instead of MIT. It stays free to use, share and change for any noncommercial purpose; commercial use needs the author's permission. Nothing else changes.
 
 ### What's new in 6.15
 * **SimCast from the setup wizard:** SimCoach-Setup.exe has a new option, *SimCast: TV commentary for your race* (unticked). Tick it and setup also installs the latest [SimCast](https://github.com/Jcedwar61/SimCast), downloaded from its GitHub release and checked against the published SHA-256 before it runs. With SimCast already installed, the option offers to update it instead. The two stay separate apps with their own updates and uninstallers.
