@@ -52,7 +52,12 @@ check(sc._input_candidates({"mic_api": "auto"}, "Nonexistent Mic")[0] == (None, 
       "a mic that has gone falls back to the Windows default")
 
 opened.clear()
-sc.open_input({"mic_api": "auto"}, "Headset Microphone (Astro A20 Voice)", None)
+_platform = sys.platform
+sys.platform = "win32"  # WASAPI settings only apply on Windows
+try:
+    sc.open_input({"mic_api": "auto"}, "Headset Microphone (Astro A20 Voice)", None)
+finally:
+    sys.platform = _platform
 check(opened and opened[0]["device"] == 3, "open_input opens the chosen device")
 check(opened[0]["extra_settings"] == ("shared", False), "WASAPI is opened in shared mode, not exclusive")
 check(opened[0]["channels"] == 1 and opened[0]["dtype"] == "float32", "the mic is opened mono, float32")
