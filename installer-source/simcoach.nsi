@@ -36,7 +36,7 @@ VIAddVersionKey "FileDescription" "SimCoach Setup"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "SimCoach"
-VIAddVersionKey "LegalCopyright" "MIT License"
+VIAddVersionKey "LegalCopyright" "PolyForm Noncommercial License 1.0.0"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
