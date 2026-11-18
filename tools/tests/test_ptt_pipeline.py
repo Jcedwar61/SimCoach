@@ -88,9 +88,17 @@ def make(stub):
     cfg = sc.load_config()
     cfg["mic"], cfg["mic_api"], cfg["whisper_model"] = "Fake mic", "wasapi", "small.en"
     heard, events = [], []
-    listener = sc.Listener(cfg, types.SimpleNamespace(hold=threading.Event()), None, heard.append,
-                           log=lambda m: None, events=lambda **kw: events.append(kw))
-    listener._model, listener._model_name = stub, "small.en"
+
+    class StubbedListener(sc.Listener):
+        def _local_model(self):
+            # the listener thread asks for the model as soon as it starts: hand it the stub then, rather than
+            # setting it after the constructor returns (which races the thread and loads the real model)
+            if self._model is None:
+                self._model, self._model_name = stub, "small.en"
+            return sc.Listener._local_model(self)
+
+    listener = StubbedListener(cfg, types.SimpleNamespace(hold=threading.Event()), None, heard.append,
+                               log=lambda m: None, events=lambda **kw: events.append(kw))
     for _ in range(150):
         if listener.state == "ready":
             break
