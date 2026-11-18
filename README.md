@@ -4,7 +4,8 @@
 * **[Download SimCoach-Setup.exe (Windows Installer, v6.16)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
-* ### Quick setup
+
+### Quick setup
 ![The three quick-setup steps](https://raw.githubusercontent.com/Jcedwar61/SimCoach/main/docs/screenshots/6.10/quick-setup.png)
 
 ### Pace and consistency in the report
