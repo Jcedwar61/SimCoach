@@ -1,7 +1,7 @@
 # SimCoach - Live English Voice Coach & Race Crew (Windows 10/11)
 
 ### Download & Preview
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.16)](SimCoach-Setup.exe)**
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.17)](SimCoach-Setup.exe)**
 * **[Latest Release & Full ZIP](../../releases/latest)**
 * **[▶️ Watch Preview Video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -33,6 +33,12 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Works with SimCast:** run [SimCast](https://github.com/Jcedwar61/SimCast)'s TV commentary at the same time and its booth drops under the coach and crew while they talk, then comes back up.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.17
+* **A provider for each AI job:** *Settings → Who does what* sends radio answers, crew banter, setup briefings, the session analysis and command understanding each to OpenAI, Google Gemini or DeepSeek. Use DeepSeek for the frequent, cheap banter and OpenAI for answers, for example. A job whose provider has no key uses the main one, and the fallback still covers outages. Any saved key now switches the AI features on, not only the main provider's.
+* **The coach's analysis in every report:** with an AI key, each Coach Report and after-race text gets a written verdict, what went well, where the time goes and a practice plan, from the session's corners, laps and your earlier sessions. It's added a few seconds after the report is written. After a race the coach also reads out the verdict and the first thing to practise. Switch it off in Settings.
+* **Commands in your own words:** "pipe down for a bit" or "let's practise turn four for three laps" now run the matching radio command. Only harmless commands can be picked this way: resetting your reference or changing the car's setup still needs the exact words.
+* **"Am I improving?"** The radio AI now sees your earlier sessions at the track.
 
 ### What's new in 6.16
 * **New licence:** SimCoach is now licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) instead of MIT. It stays free to use, share and change for any noncommercial purpose; commercial use needs the author's permission. Nothing else changes.
