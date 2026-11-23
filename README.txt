@@ -174,6 +174,10 @@ On track: live coaching & voice commands
       corner", "split deltas on / off", "start capture", "stop capture"
     * Open questions ("where am I losing time?", "how do I fix understeer in Turn 3?"): answered using your
       live session telemetry when an AI key (OpenAI, Google Gemini or DeepSeek) is configured in Settings.
+    * Say it your way: with an AI key, a command worded loosely ("mate, give me a bit more chat", "pipe down
+      for a while", "let's practise turn four for three laps") is recognised by the AI and run as the
+      matching radio command. Only harmless commands can be picked this way; resetting your reference or
+      changing the car's setup still needs the exact words.
 
 
 Race crew (Engineer, Strategist & Spotter)
@@ -257,6 +261,14 @@ Tabs & settings
       OPENAI_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY environment variable). With "try my other keys"
       ticked, if the chosen provider is down or busy SimCoach asks the next one you have a key for.
       Online speech recognition always uses the OpenAI key.
+      "Who does what" sends each job to the provider you choose: radio answers, crew banter, setup
+      briefings, the session analysis and understanding commands (for example DeepSeek for the frequent,
+      cheap banter and OpenAI for answers). "Main provider" uses the one picked above; a job whose provider
+      has no key uses the main one. "Write a coach's analysis and practice plan into each report" adds an
+      AI-written verdict, what went well, where the time goes and a practice plan to each Coach Report and
+      after-race text (written in the background a few seconds after the report; after a race the coach
+      also reads out the verdict and the first thing to practise). "Understand commands however I word
+      them" turns the loosely worded commands on or off.
   - References: view, delete, export, and import reference laps (%APPDATA%\SimCoach\references). Import a
     faster driver's reference JSON to be coached against their lap.
   - Reports: browse, open, write mid-session snapshots, or delete HTML Coach Reports, text after-race

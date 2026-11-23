@@ -97,6 +97,9 @@ DEFAULT_CONFIG = {
     "gemini_model": "gemini-3.5-flash",
     "deepseek_api_key": "",
     "deepseek_model": "deepseek-chat",
+    "ai_tasks": {},
+    "ai_reports": True,
+    "ai_commands": True,
     "talk_level": 1,
     "overlay_pedals": True,
     "overlay_locked": False,
@@ -436,6 +439,8 @@ def load_config():
     for p in ("gemini", "deepseek"):
         cfg[f"{p}_api_key"] = (cfg.get(f"{p}_api_key") or "").strip()
         cfg[f"{p}_model"] = (cfg.get(f"{p}_model") or "").strip() or DEFAULT_CONFIG[f"{p}_model"]
+    tasks = cfg.get("ai_tasks") if isinstance(cfg.get("ai_tasks"), dict) else {}
+    cfg["ai_tasks"] = {t: p for t, p in tasks.items() if t in AI_TASKS and p in ("openai", "gemini", "deepseek")}
     try:
         ver = int(cfg.get("config_version", 1))
     except (TypeError, ValueError, OverflowError):
@@ -6681,6 +6686,9 @@ class Coach:
         self.applied_setup = None
         self._sheet_wait = None
         self.last_debrief_txt = None
+        self.ai_analysis = None
+        self._ai_analysis_busy = False
+        self._debrief_parts = None
 
     _RE_SAFE_KEY = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -7085,9 +7093,10 @@ class Coach:
                 return None
             self._session_report_path = path
             self.last_report = path
-            return path
+        self.request_ai_analysis(sess)
+        return path
 
-    def end_session(self):
+    def end_session(self, ai_speak=False):
         """Save progress and write the Coach Report. Safe to call more than once as new laps arrive."""
         with self.lock:
             if self.key is None or not self.history or len(self.history) == self.history_reported:
@@ -7126,7 +7135,78 @@ class Coach:
             self.history_reported = len(self.history)
             self.last_report = path
             self.log(f"Coach report: {path}")
-            return path
+        self.request_ai_analysis(sess, speak=ai_speak)
+        return path
+
+    # --- AI session analysis: a written coach's verdict and practice plan for the report ------------------------
+    def analysis_data(self, sessions=None):
+        """Everything the AI needs to write the session analysis, as plain JSON-able data."""
+        d = self.summary()
+        with self.lock:
+            d["corner_table"] = [{"turn": r[0], "avg_loss_vs_best_s": None if r[1] is None else round(r[1], 3),
+                                  "variation_s": round(r[2], 3), "best_min_speed_kmh": round(r[3]),
+                                  "lock_ups": r[4], "wheelspins": r[5], "most_common_issue": r[6]}
+                                 for r in corner_rows(self)]
+            d["all_laps"] = [{"lap": i + 1, "time_s": round(h["time"], 3),
+                              **({"pit": True} if h.get("pit") else {}), **({"off_track": True} if h.get("invalid") else {})}
+                             for i, h in enumerate(self.history[-60:])]
+            d["session_started"] = self.session_start
+        d["previous_sessions"] = [{k: x.get(k) for k in ("date", "best", "laps", "pace_pct", "consistency")}
+                                  for x in (sessions or [])[-8:]]
+        return d
+
+    def request_ai_analysis(self, sessions, speak=False):
+        """In the background, ask the AI for the session analysis, then rewrite the report with it (and, after a
+        race, say the headline and the first thing to practise). Off with no key or with 'ai_reports' off."""
+        if not self.cfg.get("ai_reports", True) or not ai_any_key(self.cfg) or not self.history:
+            return False
+        with self.lock:
+            n = len(self.history)
+            have = self.ai_analysis
+            if have and have.get("laps") == n:
+                return False
+            if self._ai_analysis_busy:
+                return False
+            self._ai_analysis_busy = True
+            sid = self.session_id
+
+        def work():
+            try:
+                a, who = ai_session_analysis(self.cfg, self.analysis_data(sessions))
+            except Exception as e:
+                self.log(f"AI session analysis unavailable ({openai_problem(e, ai_provider(self.cfg, 'report'))})")
+                a = None
+            finally:
+                with self.lock:
+                    self._ai_analysis_busy = False
+            if not a:
+                return
+            with self.lock:
+                if sid != self.session_id:
+                    return
+                a.update(laps=n, who=who)
+                self.ai_analysis = a
+                path = self._session_report_path
+                try:
+                    if path:
+                        write_report(self, sessions, existing_path=path)
+                except OSError as e:
+                    self.log(f"Couldn't add the AI analysis to the report: {e}")
+                if self._debrief_parts:
+                    f_, parts = self._debrief_parts
+                    self._save_debrief_text(path, f_, parts + analysis_text(a))
+            self.log(f"AI session analysis added to the report ({who}).")
+            if path:
+                self.overlay.post(report_ready=path)
+            if speak:
+                self._say_analysis(a)
+        threading.Thread(target=work, daemon=True, name="ai-session-analysis").start()
+        return True
+
+    def _say_analysis(self, a):
+        line = " ".join(x for x in (a.get("headline"), (a.get("plan") or [None])[0]) if x)
+        if line:
+            self.say(f"Coach's verdict: {line}", time.monotonic(), kind="answer", force=True)
 
     def metres(self, bins):
         return int(round(abs(bins) * (self.track_len or 4000.0) / BINS / 5.0) * 5) or 5
@@ -7468,6 +7548,8 @@ class Coach:
         self.session_id = f"{time.time():.3f}"
         self.last_report = None
         self.last_debrief_txt = None
+        self.ai_analysis = None
+        self._debrief_parts = None
         self.race_finished = False
         self.race_finished_at = None
         self.pit_debrief_done = False
@@ -8142,7 +8224,7 @@ class Coach:
                      "grid": f"Start P{f.position}" + (f" of {f.cars}" if f.cars else "") if (f and f.position) else "",
                      "items": items, "strategist": strat_line, "coach": coach_line, "source": "Built-in advisor",
                      "made": time.strftime("%d %b %H:%M"), "key": (self.key, self.session_id)}
-            api_key = ai_key(self.cfg)
+            api_key = ai_key(self.cfg, ai_provider(self.cfg, "setup")) if ai_any_key(self.cfg) else ""
             is_test_sim = (sim_name == "TEST")
 
         # The session-start sheet: forced open (even on the move) before the first lap is done, unless the
@@ -8276,7 +8358,7 @@ class Coach:
             raw, who = ai_chat_ex(
                 self.cfg,
                 [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
-                max_tokens=700,
+                max_tokens=700, task="setup",
             )
             s_out, c_out = parse_setup_dialogue(raw, fallback_strat, fallback_coach)
             if s_out == fallback_strat or c_out == fallback_coach:
@@ -8704,12 +8786,16 @@ class Coach:
                     parts.append("Pedal discipline was clean with zero lock-ups or wheelspin logged.")
             if f and f.fuel > 0 and not rally:
                 parts.append(f"You boxed with {f.fuel:.1f} {fuel_unit(f.game)} of fuel remaining.")
-            path = self.end_session()
+            path = self.end_session(ai_speak=speak)
             parts.append("Your full written report is saved and ready in the Reports tab. Great drive out there.")
             report_speech = " ".join(parts)
-            self.last_debrief_txt = self._save_debrief_text(path, f, parts)
+            self._debrief_parts = (f, list(parts))
+            have = self.ai_analysis if (self.ai_analysis or {}).get("laps") == len(self.history) else None
+            self.last_debrief_txt = self._save_debrief_text(path, f, parts + (analysis_text(have) if have else []))
             if speak:
                 self.say(report_speech, now, kind="urgent", force=True)
+                if have:
+                    self._say_analysis(have)
             self.overlay.post(
                 focus=f"Debrief complete  ·  {n_laps} {u_sg if n_laps == 1 else u_pl} in report",
                 report_ready=path,
@@ -8808,6 +8894,8 @@ class Coach:
                 "race_finished": self.race_finished,
                 "car_ahead": f.car_ahead if f else None,
                 "car_behind": f.car_behind if f else None,
+                "earlier_sessions_here": [{k: x.get(k) for k in ("date", "best", "laps", "pace_pct")}
+                                          for x in (self.past_sessions() if self.key else [])[-5:]] or None,
             }
 
 
@@ -9053,7 +9141,7 @@ class Crew:
         self.last_chat = now
         gen = getattr(self, "_gen", 0)
         line = self._canned(role, event, facts)
-        if not ai_key(self.cfg):
+        if not ai_any_key(self.cfg):
             self.say(role, line, now, chat=True)
             return
 
@@ -9068,7 +9156,7 @@ class Crew:
                               "friendly ribbing, no slurs, nothing hateful." if self.salty() else " Keep it clean."))
                 msg = f"Moment: {CHATTER_EVENTS.get(event, event)}. Facts: {json.dumps(facts)}"
                 text = ai_chat(self.cfg, [{"role": "system", "content": sys_msg}, {"role": "user", "content": msg}],
-                               max_tokens=40)
+                               max_tokens=40, task="banter")
                 text = text.strip().strip('"').replace("*", "")
                 if len(text.split()) > 22:
                     text = None
@@ -10290,18 +10378,8 @@ _RE_SPOKEN_TIME = re.compile(r"\b(\d+) (\d\d\.\d)\b")
 _RE_REPORT_FILE = re.compile(r"(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})_(.*?)(_after_race\.txt|_setup\.txt|\.html)$")
 
 
-def write_report(coach, sessions, existing_path=None):
-    import html
-
-    def _pct(x, fmt):
-        return fmt.format(x) if isinstance(x, (int, float)) else "—"
-    os.makedirs(REPORT_DIR, exist_ok=True)
-    game, track, car = coach.key
-    times = [h["time"] for h in coach.history]
-    clean_times = [h["time"] for h in coach.history if not h.get("pit") and not h.get("invalid")]
-    ref_times = clean_times or [h["time"] for h in coach.history if not h.get("pit")] or times
-    best_t = coach.best_time or min(ref_times)
-    tb = coach.theoretical_best()
+def corner_rows(coach):
+    """Per corner: (turn, avg loss vs best s, variation s, best min speed, lock-ups, wheelspins, top issue)."""
     rows = []
     for ci, c in enumerate(coach.corners):
         b = coach.best_corner.get(ci, {})
@@ -10321,6 +10399,22 @@ def write_report(coach, sessions, existing_path=None):
         issues = coach.issue_counts.get(ci, {})
         top = max(issues.items(), key=lambda kv: kv[1])[0] if issues else "—"
         rows.append((ci + 1, avg_loss, stdev(segs), b.get("min_speed", 0), locks, spins, top))
+    return rows
+
+
+def write_report(coach, sessions, existing_path=None):
+    import html
+
+    def _pct(x, fmt):
+        return fmt.format(x) if isinstance(x, (int, float)) else "—"
+    os.makedirs(REPORT_DIR, exist_ok=True)
+    game, track, car = coach.key
+    times = [h["time"] for h in coach.history]
+    clean_times = [h["time"] for h in coach.history if not h.get("pit") and not h.get("invalid")]
+    ref_times = clean_times or [h["time"] for h in coach.history if not h.get("pit")] or times
+    best_t = coach.best_time or min(ref_times)
+    tb = coach.theoretical_best()
+    rows = corner_rows(coach)
     rows_sorted = sorted(rows, key=lambda r: -(r[1] or 0))
     focus = ", ".join(f"Turn {r[0]}" for r in rows_sorted[:3] if (r[1] or 0) > 0.05) or "consistency"
     trows = "".join(
@@ -10372,13 +10466,14 @@ th{{color:var(--mut);font-weight:600;font-size:12px}} h2{{font-size:17px;margin:
 svg{{width:100%;height:auto;border:1px solid var(--line);border-radius:10px}} .b{{fill:none;stroke:var(--acc);stroke-width:1.6}}
 .l{{fill:none;stroke:var(--acc2);stroke-width:1.2;opacity:.85}} .m{{stroke:var(--line)}} .t{{fill:var(--mut);font-size:11px}}
 .legend span{{margin-right:14px}} .legend i{{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px}}
-.wrap{{overflow-x:auto}}</style></head><body><main>
+.wrap{{overflow-x:auto}} .ai{{border:1px solid var(--line);border-radius:10px;padding:4px 16px 8px;margin:14px 0}}
+.ai h2{{margin-top:12px}} .ai h3{{font-size:14px;margin:12px 0 2px}} .ai ul,.ai ol{{margin:4px 0;padding-left:22px}}</style></head><body><main>
 <h1>Coach Report</h1><div class="sub">{html.escape(track)} · {html.escape(car)} · {html.escape(game)} · {html.escape(coach.session_start)}</div>
 <div class="kpis"><div class="k"><span>Best lap</span><b>{fmt_time(best_t).replace(' ', ':')}</b></div>
 <div class="k"><span>Theoretical best</span><b>{fmt_time(tb).replace(' ', ':') if tb else '—'}</b></div>
 <div class="k"><span>Laps</span><b>{len(times)}</b></div>
 {pace_kpi}<div class="k"><span>Consistency{cons_note}</span><b>{f"±{cons['sd']:.2f}s" if cons else f"{stdev(ref_times):.2f}s"}</b></div></div>{verdict}
-<p><strong>Next focus:</strong> {focus}.</p>{setup_sheet_html(sheet_with_measured_fuel(getattr(coach, "last_setup_sheet", None), measured_fpl, game))}{f'<p><strong>Pre-race setup (Strategist &amp; Coach):</strong> {html.escape(coach.last_setup_briefing["strategist"].replace("k p h", "km/h"))} {html.escape(coach.last_setup_briefing["coach"].replace("k p h", "km/h"))}</p>' if getattr(coach, "last_setup_briefing", None) else ''}
+<p><strong>Next focus:</strong> {focus}.</p>{analysis_html(getattr(coach, "ai_analysis", None))}{setup_sheet_html(sheet_with_measured_fuel(getattr(coach, "last_setup_sheet", None), measured_fpl, game))}{f'<p><strong>Pre-race setup (Strategist &amp; Coach):</strong> {html.escape(coach.last_setup_briefing["strategist"].replace("k p h", "km/h"))} {html.escape(coach.last_setup_briefing["coach"].replace("k p h", "km/h"))}</p>' if getattr(coach, "last_setup_briefing", None) else ''}
 {drills_html}<h2>Speed trace</h2><div class="legend"><span><i style="background:var(--acc)"></i>Best lap</span><span><i style="background:var(--acc2)"></i>Last lap</span></div>{svg}
 <h2>Turn by turn</h2><div class="wrap"><table><tr><th>Corner</th><th>Avg loss vs your best</th><th>Variation</th><th>Best min speed (km/h)</th><th>Lock-ups</th><th>Wheelspin</th><th>Most common issue</th></tr>{trows}</table></div>
 <h2>Laps</h2><div class="wrap"><table><tr><th>Lap</th><th>Time</th><th>Gap to best</th></tr>{lrows}</table></div>
@@ -10542,8 +10637,18 @@ AI_PROVIDERS = OrderedDict((
                   "env": "DEEPSEEK_API_KEY", "models": DEEPSEEK_MODELS,
                   "key_url": "https://platform.deepseek.com/api_keys", "tokens": "max_tokens", "extra": {}}),
 ))
+# Jobs the AI does. Each can go to its own provider (Settings -> "Who does what"), e.g. DeepSeek for the cheap,
+# frequent banter and OpenAI for radio answers; unset means the main provider.
+AI_TASKS = OrderedDict((
+    ("chat", "Radio answers"),
+    ("banter", "Crew banter"),
+    ("setup", "Setup briefings"),
+    ("report", "Session analysis"),
+    ("commands", "Understanding commands"),
+))
 _AI_LABELS = [p["label"] for p in AI_PROVIDERS.values()]
 _AI_BY_LABEL = {p["label"]: k for k, p in AI_PROVIDERS.items()}
+_AI_TASK_MAIN = "Main provider"
 
 _OPENAI_CLIENTS = {}
 _OPENAI_LOCK = threading.Lock()
@@ -10553,9 +10658,21 @@ class OpenAIReplyError(RuntimeError):
     """The AI answered, but with nothing usable (empty, cut off, refused or filtered). The message is speakable."""
 
 
-def ai_provider(cfg):
+def ai_provider(cfg, task=None):
+    """The provider for a job: the one chosen for that task (when it has a key), else the main one."""
+    if task:
+        t = ((cfg or {}).get("ai_tasks") or {}).get(task)
+        if t in AI_PROVIDERS and ai_key(cfg, t):
+            return t
     p = (cfg or {}).get("ai_provider") or "openai"
     return p if p in AI_PROVIDERS else "openai"
+
+
+def ai_any_key(cfg):
+    """True when at least one provider has a key (with fallback on, any key keeps the AI features working)."""
+    if ai_key(cfg):
+        return True
+    return bool(cfg.get("ai_fallback", True)) and any(ai_key(cfg, p) for p in AI_PROVIDERS)
 
 
 def ai_key(cfg, provider=None):
@@ -10665,14 +10782,27 @@ def _ai_transient(e):
     return isinstance(e, (openai.APIConnectionError, openai.RateLimitError, openai.InternalServerError))
 
 
-def ai_chat_ex(cfg, messages, max_tokens=300, timeout=20.0):
-    """(reply, 'Provider model') from the chosen provider. With 'ai_fallback' on, a network, rate-limit or
-    server failure moves on to the other providers that have a key, so the radio keeps working. A failure
-    carries .ai_provider (the provider that failed last) so the spoken explanation names the right one."""
-    primary = ai_provider(cfg)
-    order = [primary]
+def ai_order(cfg, task=None):
+    """Providers to try, in order: the task's own provider, the main one, then (with fallback on) any other
+    provider with a key. A provider with no key is skipped unless nothing else is left."""
+    first = ai_provider(cfg, task)
+    order = [first]
+    main = ai_provider(cfg)
+    if main != first and ai_key(cfg, main):
+        order.append(main)
     if cfg.get("ai_fallback", True):
-        order += [p for p in AI_PROVIDERS if p != primary and ai_key(cfg, p)]
+        order += [p for p in AI_PROVIDERS if p not in order and ai_key(cfg, p)]
+    if not ai_key(cfg, first) and len(order) > 1:
+        order = order[1:]
+    return order
+
+
+def ai_chat_ex(cfg, messages, max_tokens=300, timeout=20.0, task=None):
+    """(reply, 'Provider model') from the provider chosen for this task (else the main one). With 'ai_fallback'
+    on, a network, rate-limit or server failure (or a missing key) moves on to the other providers that have a
+    key, so the radio keeps working. A failure carries .ai_provider (the provider that failed last) so the
+    spoken explanation names the right one."""
+    order = ai_order(cfg, task)
     for i, p in enumerate(order):
         try:
             return openai_chat(ai_key(cfg, p), ai_model(cfg, p), messages, max_tokens=max_tokens,
@@ -10686,8 +10816,84 @@ def ai_chat_ex(cfg, messages, max_tokens=300, timeout=20.0):
                 raise
 
 
-def ai_chat(cfg, messages, max_tokens=300, timeout=20.0):
-    return ai_chat_ex(cfg, messages, max_tokens, timeout)[0]
+def ai_chat(cfg, messages, max_tokens=300, timeout=20.0, task=None):
+    return ai_chat_ex(cfg, messages, max_tokens, timeout, task=task)[0]
+
+
+ANALYSIS_PROMPT = """You are {persona}
+You are writing the coach's analysis at the top of {name}'s written sim racing session report.
+Use ONLY the session data given: never invent lap times, corners, positions or numbers. Corners are numbered in
+the order found on the lap. Speeds are km/h, times in seconds (write them as 1:42.315 or "three tenths").
+Reply with ONLY a JSON object:
+{{"headline": one sentence verdict on the session (at most 25 words),
+ "strengths": 1 to 3 short sentences on what went well,
+ "time_loss": 1 to 4 short sentences, each naming a corner or habit, how much it costs and why (weight transfer,
+   rotation, tyres),
+ "plan": 2 to 4 concrete practice steps for the next session, most valuable first, each one action to drill,
+ "progress": one sentence comparing with previous sessions, or "" when there are none}}
+No markdown, no emojis."""
+
+
+def _clean_list(v, n, width=320):
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, list):
+        return []
+    return [str(x).replace("*", "").strip()[:width] for x in v if isinstance(x, (str, int, float)) and str(x).strip()][:n]
+
+
+def parse_analysis(raw):
+    """The analysis dict from a model reply (headline, strengths, time_loss, plan, progress), or None."""
+    d = _json_reply(raw)
+    if not isinstance(d, dict):
+        return None
+    head = d.get("headline")
+    a = {"headline": str(head).replace("*", "").strip()[:300] if isinstance(head, str) else "",
+         "strengths": _clean_list(d.get("strengths"), 3), "time_loss": _clean_list(d.get("time_loss"), 4),
+         "plan": _clean_list(d.get("plan"), 4),
+         "progress": str(d.get("progress") or "").replace("*", "").strip()[:300] if isinstance(d.get("progress"), str) else ""}
+    return a if a["headline"] and (a["plan"] or a["time_loss"]) else None
+
+
+def ai_session_analysis(cfg, data):
+    """(analysis dict or None, 'Provider model'): the AI's written verdict and practice plan for a session."""
+    name = cfg.get("driver_name") or "the driver"
+    p_key = cfg.get("coach_personality", DEFAULT_CONFIG["coach_personality"])
+    persona = COACH_PERSONA_PROMPTS.get(p_key, COACH_PERSONA_PROMPTS["apex"]).format(name=name)
+    raw, who = ai_chat_ex(cfg, [{"role": "system", "content": ANALYSIS_PROMPT.format(persona=persona, name=name)},
+                                {"role": "user", "content": "SESSION DATA: " + json.dumps(data, separators=(",", ":"),
+                                                                                           default=str)}],
+                          max_tokens=900, timeout=45.0, task="report")
+    return parse_analysis(raw), who
+
+
+def analysis_html(a):
+    """The report's "Coach's analysis" section ('' when there's none)."""
+    if not a:
+        return ""
+    import html as _h
+
+    def ul(title, items):
+        return (f"<h3>{title}</h3><ul>" + "".join(f"<li>{_h.escape(x)}</li>" for x in items) + "</ul>") if items else ""
+    return (f'<section class="ai"><h2>Coach\'s analysis</h2><p><strong>{_h.escape(a.get("headline", ""))}</strong></p>'
+            + ul("What went well", a.get("strengths")) + ul("Where the time goes", a.get("time_loss"))
+            + ("<h3>Practice plan</h3><ol>" + "".join(f"<li>{_h.escape(x)}</li>" for x in a["plan"]) + "</ol>"
+               if a.get("plan") else "")
+            + (f"<p>{_h.escape(a['progress'])}</p>" if a.get("progress") else "")
+            + f'<p class="sub">Written by {_h.escape(a.get("who", "AI"))} from this session\'s data.</p></section>')
+
+
+def analysis_text(a):
+    """The analysis as paragraphs for the after-race text file."""
+    if not a:
+        return []
+    out = [f"Coach's analysis ({a.get('who', 'AI')}): {a.get('headline', '')}"]
+    for title, key in (("What went well", "strengths"), ("Where the time goes", "time_loss"), ("Practice plan", "plan")):
+        if a.get(key):
+            out.append(f"{title}: " + " ".join(f"{i + 1}. {x}" if key == "plan" else x for i, x in enumerate(a[key])))
+    if a.get("progress"):
+        out.append(a["progress"])
+    return out
 
 
 def openai_problem(e, provider="openai"):
@@ -11530,7 +11736,7 @@ class Conversation:
         now = time.monotonic()
         if not self.coach.live():
             self.voice.on_straight.set()
-        key = ai_key(self.cfg)
+        key = ai_any_key(self.cfg)
         tl = text.lower()
         if (self._RE_SETUP.search(tl) and key and not self._RE_SHEET.search(tl)
                 and not self._RE_SHEET_CLOSE.search(tl) and not self._RE_SETUP_APPLY.search(tl)):
@@ -11863,26 +12069,65 @@ class Conversation:
                 return f"Copy, coach personality set to {p_desc}."
         return None
 
+    # Commands the AI may pick for loosely worded speech ("can you shut up for a bit" -> "be quiet"). Only
+    # commands that are harmless to get wrong: nothing that deletes laps or changes the car.
+    AI_COMMANDS = ("be quiet", "talk more", "normal coaching", "repeat", "radio check",
+                   "braking tones off", "braking tones on", "braking tones all corners",
+                   "split deltas on", "split deltas off", "work on turn N for M laps", "stop the drill",
+                   "skip the briefing", "full briefing", "show the setup sheet", "close the setup sheet",
+                   "session report", "after race debrief", "how much fuel do i need", "tyre report", "damage report",
+                   "pit window", "who is ahead", "switch to apex coach", "switch to rotation coach",
+                   "switch to composed coach", "switch to feel coach", "switch to exit coach", "switch to data coach")
+    _RE_AI_CMD = re.compile("^(?:" + "|".join(re.escape(c).replace("N", r"\d{1,2}").replace("M", r"\d{1,2}")
+                                              for c in AI_COMMANDS) + ")$")
+    _RE_CMD_REPLY = re.compile(r"^\W*CMD\s*:\s*(.+?)\s*$", re.IGNORECASE | re.DOTALL)
+
+    def _commands_prompt(self):
+        return ("\nRadio commands: if the driver is telling you to DO one of these (not asking a question), reply with "
+                "exactly 'CMD: <command>' and nothing else, worded exactly as listed with N and M filled in as digits: "
+                + "; ".join(self.AI_COMMANDS) + ". Otherwise answer normally.")
+
+    def ai_command(self, reply):
+        """(spoken answer, command) when the AI mapped the driver's words to a radio command, else None."""
+        m = self._RE_CMD_REPLY.match(reply or "")
+        if not m:
+            return None
+        cmd = m.group(1).strip().strip("'\"`").rstrip(".!").strip().lower()
+        if not self._RE_AI_CMD.match(cmd):
+            return "Say again, I didn't catch that command.", None
+        out = self.local(cmd)
+        return (out if out is not None else "Say again, I didn't catch that."), cmd
+
     def _ask_openai(self, text):
-        prov = ai_provider(self.cfg)
+        prov = ai_provider(self.cfg, "chat")
         name = AI_PROVIDERS[prov]["name"]
         now = time.monotonic
-        if not ai_key(self.cfg):
+        if not ai_any_key(self.cfg):
             msg = f"I can't chat yet. Add your {name} API key in Settings."
             self.voice.say(msg, now(), "answer")
             self.overlay.post(rc_t=now(), rc_reply=msg, rc_ai_fail=f"No {name} API key")
             return
-        model = ai_model(self.cfg)
+        model = ai_model(self.cfg, prov)
         self.overlay.post(rc_t=now(), rc_thinking=model)
         t0 = now()
         with self._lock:
             recent = list(self.history[-6:])
-        messages = [{"role": "system", "content": build_system_prompt(self.cfg)}]
+        use_cmds = bool(self.cfg.get("ai_commands", True))
+        messages = [{"role": "system", "content": build_system_prompt(self.cfg) + (self._commands_prompt() if use_cmds else "")}]
         messages += [{"role": role, "content": msg} for role, msg in recent]
         data = json.dumps(self.coach.summary(), separators=(",", ":"))
         messages.append({"role": "user", "content": f"SESSION DATA: {data}\n\nDRIVER SAYS: {text}"})
         try:
-            reply, who = ai_chat_ex(self.cfg, messages)
+            reply, who = ai_chat_ex(self.cfg, messages, task="chat")
+            cmd = self.ai_command(reply) if use_cmds else None
+            if cmd is not None:
+                reply, done_cmd = cmd
+                self.overlay.post(rc_t=now(), rc_reply=reply or "Copy.",
+                                  rc_ai=f"{who} · command '{done_cmd or '?'}' · {now() - t0:.1f} s")
+                if reply:
+                    self.voice.say(reply, now(), "answer")
+                    self.overlay.post(tip=reply)
+                return
             reply = reply.replace("*", "").replace("`", "").replace("#", "").strip() or "Say again, I didn't catch that."
             with self._lock:
                 self.history = (self.history + [("user", text), ("assistant", reply)])[-12:]
@@ -11898,7 +12143,7 @@ class Conversation:
     def _ask_openai_setup(self, text):
         """Collaborative Strategist + Coach race setup recommendation powered by the chosen AI."""
         now = time.monotonic
-        model = ai_model(self.cfg)
+        model = ai_model(self.cfg, ai_provider(self.cfg, "setup"))
         self.overlay.post(rc_t=now(), rc_thinking=f"{model} (Strategist + Coach setup)")
         t0 = now()
         s_line, c_line = self.coach.collaborate_race_setup(
@@ -14320,6 +14565,21 @@ class App:
         self.vars["ai_fallback"] = tk.BooleanVar(value=bool(self.cfg.get("ai_fallback", True)))
         ttk.Checkbutton(cv, text="If the provider is down or busy, try my other keys", variable=self.vars["ai_fallback"]
                         ).pack(anchor="w", pady=(6, 0))
+        self.vars["ai_reports"] = tk.BooleanVar(value=bool(self.cfg.get("ai_reports", True)))
+        ttk.Checkbutton(cv, text="Write a coach's analysis and practice plan into each report",
+                        variable=self.vars["ai_reports"]).pack(anchor="w", pady=(2, 0))
+        self.vars["ai_commands"] = tk.BooleanVar(value=bool(self.cfg.get("ai_commands", True)))
+        ttk.Checkbutton(cv, text="Understand commands however I word them",
+                        variable=self.vars["ai_commands"]).pack(anchor="w", pady=(2, 0))
+        ttk.Label(cv, text="Who does what (e.g. DeepSeek for banter, OpenAI for answers)", style="Mut.TLabel"
+                  ).pack(anchor="w", pady=(8, 2))
+        cg_task = grid_rows(cv)
+        task_tasks = self.cfg.get("ai_tasks") or {}
+        for i, (tid, tlabel) in enumerate(AI_TASKS.items()):
+            self.vars[f"ai_task_{tid}"] = tk.StringVar(value=AI_PROVIDERS[task_tasks[tid]]["label"]
+                                                       if task_tasks.get(tid) in AI_PROVIDERS else _AI_TASK_MAIN)
+            row(cg_task, i, tlabel, ttk.Combobox(cg_task, textvariable=self.vars[f"ai_task_{tid}"],
+                                                 values=[_AI_TASK_MAIN] + _AI_LABELS, state="readonly", width=28))
         kb = ttk.Frame(cv, style="Card.TFrame")
         kb.pack(fill="x", pady=(8, 0))
         ttk.Button(kb, text="Get an API key", command=lambda: self._open(
@@ -15593,6 +15853,10 @@ class App:
         self.cfg["mic_gain"] = round(float(v["mic_gain"].get()), 2)
         self.cfg["ai_provider"] = _AI_BY_LABEL.get(v["ai_provider"].get(), "openai")
         self.cfg["ai_fallback"] = bool(v["ai_fallback"].get())
+        self.cfg["ai_reports"] = bool(v["ai_reports"].get())
+        self.cfg["ai_commands"] = bool(v["ai_commands"].get())
+        self.cfg["ai_tasks"] = {t: _AI_BY_LABEL[v[f"ai_task_{t}"].get()] for t in AI_TASKS
+                                if v[f"ai_task_{t}"].get() in _AI_BY_LABEL}
         for pid in AI_PROVIDERS:
             self.cfg[f"{pid}_api_key"] = v[f"{pid}_api_key"].get().strip() or DEFAULT_CONFIG[f"{pid}_api_key"]
             self.cfg[f"{pid}_model"] = (v[f"{pid}_model"].get() or DEFAULT_CONFIG[f"{pid}_model"]).strip()

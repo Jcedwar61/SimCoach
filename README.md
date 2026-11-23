@@ -28,8 +28,8 @@ Assetto Corsa, ACC, AC EVO, AC Rally, Le Mans Ultimate, rFactor 2, Automobilista
 * **Shared reference library:** laps other drivers share are downloaded automatically for your exact sim, track and car. The **Best laps** tab keeps your own best laps and shares them in one click, or automatically if you switch that on (free GitHub sign-in); a shared lap is checked and added automatically if it's the fastest for that combination.
 * **Pace and consistency:** your best lap as a percentage of the target, how repeatable your laps are, and which of the two to work on first.
 * **Overlay and phone screen:** a click-through overlay with delta and pedal traces, plus a live page for a phone or tablet on the same Wi-Fi (click *Phone screen* and scan the code).
-* **Talk to it:** push-to-talk (wheel button or F8) with offline speech recognition; optional AI answers, banter and setup briefings through OpenAI, Google Gemini or DeepSeek, with automatic fallback.
-* **Reports:** an HTML report after each session.
+* **Talk to it:** push-to-talk (wheel button or F8) with offline speech recognition; optional AI answers, banter, setup briefings and commands in your own words through OpenAI, Google Gemini or DeepSeek, with automatic fallback. Pick a different provider for each job (say DeepSeek for banter and OpenAI for answers).
+* **Reports:** an HTML report after each session, with an optional AI-written coach's analysis and practice plan.
 * **Works with SimCast:** run [SimCast](https://github.com/Jcedwar61/SimCast)'s TV commentary at the same time and its booth drops under the coach and crew while they talk, then comes back up.
 
 The full guide is in [README.txt](README.txt). The library's rules are in [references/](references/). Developer tools and the release checklist are in [tools/](tools/). Third-party data credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
