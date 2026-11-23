@@ -105,6 +105,13 @@ def run():
         app.vars["deepseek_api_key"].set("dk")
         app.save_settings(quiet=True)
         check(saved.get("ai_provider") == "deepseek" and saved.get("deepseek_api_key") == "dk", "settings saved")
+        check(app.vars["ai_task_banter"].get() == "Main provider" and app.vars["ai_reports"].get()
+              and app.vars["ai_commands"].get(), "AI job settings shown with their defaults")
+        app.vars["ai_task_banter"].set("DeepSeek")
+        app.vars["ai_reports"].set(False)
+        app.save_settings(quiet=True)
+        check(saved.get("ai_tasks") == {"banter": "deepseek"} and saved.get("ai_reports") is False,
+              "a provider per job and the report analysis switch are saved")
         check(app.vars["briefing_mode"].get() == "Full once a day, then short" and app.vars["sheet_autopop"].get(),
               "briefing settings shown with their defaults")
         app.vars["briefing_mode"].set("Full every session")
