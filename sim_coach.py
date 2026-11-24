@@ -12408,9 +12408,91 @@ _UPDATES_BY_LABEL = dict(CREW_UPDATES)
 _CHATTER_BY_LABEL = dict(CREW_CHATTER)
 _LANGUAGE_BY_LABEL = dict(CREW_LANGUAGE)
 
-C = {"bg": "#0b0f14", "panel": "#121821", "panel2": "#19212c", "line": "#263142", "fg": "#e6edf3",
-     "mut": "#8d99a8", "acc": "#3d8bfd", "acc_hi": "#5d9fff", "acc_fg": "#ffffff", "hover": "#212c3a",
-     "good": "#34d399", "bad": "#f87171", "warn": "#fbbf24", "tip": "#fcd34d", "teal": "#5eead4", "violet": "#c4b5fd"}
+C = {"bg": "#0a0d12", "panel": "#11161d", "panel2": "#1a212b", "line": "#242c38", "fg": "#e8edf3",
+     "mut": "#8a95a5", "acc": "#4a8cff", "acc_hi": "#6aa0ff", "acc_fg": "#ffffff", "hover": "#222b37",
+     "good": "#34d399", "bad": "#f87171", "warn": "#fbbf24", "tip": "#fcd34d", "teal": "#5eead4", "violet": "#c4b5fd",
+     "line2": "#2f3946", "acc_lo": "#3a78e6", "sel": "#1b2c47", "faint": "#5d6878"}
+
+
+def _png_b64(w, h, px):
+    """Encode px(x, y) -> (r, g, b, a) floats 0..1 as a base64 RGBA PNG (Tk 8.6 reads PNG with alpha natively).
+    Lets the UI draw anti-aliased rounded shapes without Pillow."""
+    import base64
+    import zlib
+    raw = bytearray()
+    for y in range(h):
+        raw.append(0)
+        for x in range(w):
+            r, g, b, a = px(x, y)
+            raw += bytes(max(0, min(255, int(v * 255 + 0.5))) for v in (r, g, b, a))
+
+    def chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+    return base64.b64encode(png).decode("ascii")
+
+
+def _rgb(h):
+    return tuple(int(h[i:i + 2], 16) / 255 for i in (1, 3, 5))
+
+
+def _rr_sdf(x, y, x0, y0, x1, y1, r):
+    """Signed distance from (x, y) to a rounded rectangle (negative inside)."""
+    cx, cy, hx, hy = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2 - r, (y1 - y0) / 2 - r
+    qx, qy = abs(x - cx) - hx, abs(y - cy) - hy
+    return math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - r
+
+
+def _seg_dist(px_, py_, ax, ay, bx, by):
+    dx, dy = bx - ax, by - ay
+    t = max(0.0, min(1.0, ((px_ - ax) * dx + (py_ - ay) * dy) / (dx * dx + dy * dy or 1)))
+    return math.hypot(px_ - (ax + t * dx), py_ - (ay + t * dy))
+
+
+def _ui_shape(w, h, r, fill=None, border=None, bw=1.0, inset=0.0, mark=None, mark_col=None, mark_w=1.6, bar=None,
+              rect=None):
+    """One theme image: a rounded rectangle (fill and/or border, None = transparent) on a transparent canvas, plus
+    optional polyline `mark` (checkmark, chevron) or dot, or `bar` = (colour, height) along the bottom edge."""
+    fc, bc = (_rgb(fill) if fill else None), (_rgb(border) if border else None)
+    mc = _rgb(mark_col) if mark_col else None
+
+    def px(x, y):
+        X, Y = x + 0.5, y + 0.5
+        if bar is not None:
+            col, bh = bar
+            if y >= h - bh:
+                return (*_rgb(col), 1.0)
+            return (*fc, 1.0) if fc else (0, 0, 0, 0)
+        d = _rr_sdf(X, Y, *(rect or (inset, inset, w - inset, h - inset)), r)
+        outer = max(0.0, min(1.0, 0.5 - d))
+        if outer <= 0:
+            return 0, 0, 0, 0
+        inner = max(0.0, min(1.0, 0.5 - (d + bw))) if bc else 1.0
+        cols, ws = [], []
+        if bc:
+            cols.append(bc)
+            ws.append(outer - inner)
+        if fc:
+            cols.append(fc)
+            ws.append(inner)
+        if mark and mc:
+            if mark[0] == "dot":
+                x0, y0, x1, y1 = rect or (0, 0, w, h)
+                m = max(0.0, min(1.0, 0.5 - (math.hypot(X - (x0 + x1) / 2, Y - (y0 + y1) / 2) - mark[1])))
+            else:
+                dist = min(_seg_dist(X, Y, *mark[i], *mark[i + 1]) for i in range(len(mark) - 1))
+                m = max(0.0, min(1.0, mark_w / 2 + 0.5 - dist))
+            ws = [v * (1 - m) for v in ws]
+            cols.append(mc)
+            ws.append(m * outer)
+        a = sum(ws)
+        if a <= 0:
+            return 0, 0, 0, 0
+        rgb = [sum(c[i] * wt for c, wt in zip(cols, ws)) / a for i in range(3)]
+        return rgb[0], rgb[1], rgb[2], min(1.0, a)
+    return _png_b64(w, h, px)
 
 _LOGO_PNG = (   # the header logo: the icon at 40 px, scaled smoothly (Tk can only halve an image)
     "iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAYAAACM/rhtAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6"
@@ -14093,6 +14175,7 @@ class App:
                 self._setup_win = None
         tk, ttk = self.tk, self.ttk
         w = self._setup_win = tk.Toplevel(self.root)
+        w.withdraw()             # built and placed off screen, then shown: no flash in the corner
         w.title("Welcome to SimCoach")
         w.configure(bg=C["panel"])
         w.resizable(False, False)
@@ -14205,6 +14288,18 @@ class App:
             w.geometry(f"+{max(0, x)}+{max(0, y)}")
         except Exception:
             pass
+        w.deiconify()
+
+        def grab_keys():         # take the keyboard once the box is on screen, so the name can be typed straight away
+            try:
+                w.lift()
+                w.focus_force()
+                for c in body.winfo_children():
+                    if c.winfo_class() == "TEntry":
+                        c.focus_set()
+            except Exception:
+                pass
+        w.after(120, grab_keys)
 
     def _set_icon(self):
         try:
@@ -14232,106 +14327,238 @@ class App:
         fam = self._font_fams[1] if mono else self._font_fams[2] if (bold and size >= 14) else self._font_fams[0]
         return (fam, size, "bold") if bold else (fam, size)
 
+    def _img(self, key, *a, **kw):
+        """A cached theme image drawn by _ui_shape (sizes in 96-dpi pixels, scaled for the screen)."""
+        cache = self.__dict__.setdefault("_imgs", {})
+        if key not in cache:
+            cache[key] = self.tk.PhotoImage(master=self.root, data=_ui_shape(*a, **kw))
+        return cache[key]
+
     def _style(self):
-        """Flat, modern, always-dark ttk theme (clam base)."""
+        """Flat, modern, always-dark ttk theme: a child of clam whose buttons, fields, cards, tabs, checkboxes,
+        sliders and scrollbars are anti-aliased rounded images (drawn at start-up, no image files needed)."""
         st = self.ttk.Style(self.root)
-        st.theme_use("clam")
+        try:
+            st.theme_create("simcoach", parent="clam")
+        except Exception:
+            pass
+        st.theme_use("simcoach")
+        img = self._img
         f10 = self._font(10)
         st.configure(".", background=C["bg"], foreground=C["fg"], fieldbackground=C["panel2"], font=f10,
                      bordercolor=C["line"], lightcolor=C["line"], darkcolor=C["line"], troughcolor=C["panel"],
                      focuscolor=C["acc"], selectbackground=C["acc"], selectforeground=C["acc_fg"],
                      insertcolor=C["fg"])
+        st.map(".", foreground=[("disabled", C["faint"])])
+
+        def el(name, base, states=(), **kw):
+            kw.setdefault("padding", 0)
+            try:
+                st.element_create(name, "image", base, *states, **kw)
+            except Exception:
+                pass
+
+        # --- surfaces ---------------------------------------------------------------------------------------
         st.configure("TFrame", background=C["bg"])
         st.configure("Card.TFrame", background=C["panel"], borderwidth=0)
-        st.configure("CardBox.TFrame", background=C["panel"], bordercolor=C["line"], lightcolor=C["line"],
-                     darkcolor=C["line"], borderwidth=1, relief="solid")
+        el("Card.bg", img("card", 28, 28, 10, fill=C["panel"], border=C["line"]), border=12, sticky="nsew")
+        st.layout("CardBox.TFrame", [("Card.bg", {"sticky": "nswe"})])
+        st.configure("CardBox.TFrame", background=C["bg"])
         st.configure("Bar.TFrame", background=C["bg"])
-        st.configure("Pill.TFrame", background=C["panel2"])
+        el("Pill.bg", img("pill", 32, 28, 13, fill=C["panel2"], border=C["line2"]), border=(14, 13, 14, 13), sticky="nsew")
+        st.layout("Pill.TFrame", [("Pill.bg", {"sticky": "nswe"})])
+        st.configure("Pill.TFrame", background=C["bg"])
+
+        # --- text -------------------------------------------------------------------------------------------
         st.configure("TLabel", background=C["bg"], foreground=C["fg"])
         st.configure("Card.TLabel", background=C["panel"])
         st.configure("Mut.TLabel", background=C["panel"], foreground=C["mut"])
         st.configure("BgMut.TLabel", background=C["bg"], foreground=C["mut"], font=self._font(9))
+        st.configure("Cap.TLabel", background=C["panel"], foreground=C["mut"], font=self._font(8, True))
         st.configure("Pill.TLabel", background=C["panel2"], foreground=C["fg"], font=self._font(9, True))
         st.configure("Sec.TLabel", background=C["panel"], foreground=C["fg"], font=self._font(11, True))
+        st.configure("SecBg.TLabel", background=C["bg"], foreground=C["fg"], font=self._font(11, True))
         st.configure("H.TLabel", background=C["bg"], font=self._font(17, True))
-        st.configure("TNotebook", background=C["bg"], borderwidth=0, tabmargins=(0, 4, 0, 0),
+
+        # --- tabs: plain labels with an accent underline on the selected one ----------------------------------
+        st.configure("TNotebook", background=C["bg"], borderwidth=0, tabmargins=(0, 0, 0, 0),
                      bordercolor=C["bg"], lightcolor=C["bg"], darkcolor=C["bg"])
-        st.configure("TNotebook.Tab", background=C["bg"], foreground=C["mut"], padding=(18, 9), borderwidth=0,
-                     font=self._font(10, True), bordercolor=C["bg"], lightcolor=C["bg"], darkcolor=C["bg"])
-        st.map("TNotebook.Tab", background=[("selected", C["panel2"]), ("active", C["hover"])],
-               foreground=[("selected", C["fg"]), ("active", C["fg"])],
-               lightcolor=[("selected", C["acc"])], bordercolor=[("selected", C["panel2"])],
-               darkcolor=[("selected", C["panel2"])], expand=[("selected", (0, 0, 0, 0))])
-        try:
-            st.layout("TNotebook.Tab", [("Notebook.tab", {"sticky": "nswe", "children": [
-                ("Notebook.padding", {"side": "top", "sticky": "nswe", "children": [
-                    ("Notebook.label", {"side": "top", "sticky": ""})]})]})])
-        except Exception:
-            pass
-        st.configure("TButton", background=C["panel2"], foreground=C["fg"], padding=(14, 7), borderwidth=0,
-                     relief="flat", focusthickness=0, lightcolor=C["panel2"], darkcolor=C["panel2"])
-        st.map("TButton", background=[("pressed", C["line"]), ("active", C["hover"])],
-               lightcolor=[("active", C["hover"])], darkcolor=[("active", C["hover"])])
-        st.configure("Accent.TButton", background=C["acc"], foreground=C["acc_fg"], font=self._font(10, True),
-                     lightcolor=C["acc"], darkcolor=C["acc"])
-        st.map("Accent.TButton", background=[("pressed", "#2f6fd6"), ("active", C["acc_hi"])],
-               lightcolor=[("active", C["acc_hi"])], darkcolor=[("active", C["acc_hi"])])
-        st.configure("Stop.TButton", background="#ef4444", foreground="#ffffff", font=self._font(10, True),
-                     lightcolor="#ef4444", darkcolor="#ef4444")
-        st.map("Stop.TButton", background=[("pressed", "#b91c1c"), ("active", "#f05252")])
-        st.configure("Small.TButton", padding=(10, 4))
-        st.configure("Treeview", background=C["panel"], fieldbackground=C["panel"], foreground=C["fg"], rowheight=30,
-                     borderwidth=0, relief="flat")
-        st.configure("Treeview.Heading", background=C["panel2"], foreground=C["mut"], relief="flat", padding=(8, 6),
-                     font=self._font(9, True), borderwidth=0)
-        st.map("Treeview.Heading", background=[("active", C["hover"])])
-        st.map("Treeview", background=[("selected", "#1d3557")], foreground=[("selected", C["fg"])])
+        el("Tab.bg", img("tab", 8, 12, 0, fill=C["bg"], bar=(C["bg"], 2)),
+           (("selected", img("tab_sel", 8, 12, 0, fill=C["bg"], bar=(C["acc"], 2))),
+            ("active", img("tab_hov", 8, 12, 0, fill=C["bg"], bar=(C["line2"], 2)))),
+           border=(2, 2, 2, 3), sticky="nsew")
+        st.layout("TNotebook.Tab", [("Tab.bg", {"sticky": "nswe", "children": [
+            ("Notebook.padding", {"side": "top", "sticky": "nswe", "children": [
+                ("Notebook.label", {"side": "top", "sticky": ""})]})]})])
+        st.configure("TNotebook.Tab", background=C["bg"], foreground=C["mut"], padding=(16, 10, 16, 11),
+                     borderwidth=0, font=self._font(10, True))
+        st.map("TNotebook.Tab", foreground=[("selected", C["fg"]), ("active", C["fg"])],
+               expand=[("selected", (0, 0, 0, 0))], padding=[("selected", (16, 10, 16, 11))])
+
+        # --- buttons ----------------------------------------------------------------------------------------
+        def button(style, name, fill, hover, press, fg, border=None, font=None, hover_border=None):
+            dis = img("btn_dis", 20, 20, 7, fill=C["panel"], border=C["line"])
+            el(f"{name}.bg", img(f"{name}_n", 20, 20, 7, fill=fill, border=border),
+               (("disabled", dis),
+                ("pressed", img(f"{name}_p", 20, 20, 7, fill=press, border=border)),
+                ("active", img(f"{name}_h", 20, 20, 7, fill=hover, border=hover_border or border))),
+               border=8, sticky="nsew")
+            st.layout(style, [(f"{name}.bg", {"sticky": "nswe", "children": [
+                ("Button.padding", {"sticky": "nswe", "children": [("Button.label", {"sticky": "nswe"})]})]})])
+            st.configure(style, foreground=fg, padding=(16, 7), anchor="center", **({"font": font} if font else {}))
+            st.map(style, foreground=[("disabled", C["faint"])], background=[], lightcolor=[], darkcolor=[])
+
+        bold = self._font(10, True)
+        button("TButton", "Btn", C["panel2"], C["hover"], C["line"], C["fg"], border=C["line2"])
+        button("Accent.TButton", "AccBtn", C["acc"], C["acc_hi"], C["acc_lo"], C["acc_fg"], font=bold)
+        button("Stop.TButton", "StopBtn", "#e5484d", "#f06267", "#c9363b", "#ffffff", font=bold)
+        button("Outline.TButton", "OutBtn", None, C["panel2"], C["hover"], C["fg"], border=C["line2"],
+               hover_border=C["faint"])
+        button("Ghost.TButton", "GhostBtn", None, C["panel2"], C["hover"], C["mut"])
+        st.map("Ghost.TButton", foreground=[("disabled", C["faint"]), ("active", C["fg"])])
+        st.configure("Small.TButton", padding=(12, 4))
+
+        # --- fields -----------------------------------------------------------------------------------------
+        fld = dict(fill=C["panel2"], border=C["line2"])
+        f_n = img("fld_n", 20, 20, 6, **fld)
+        f_h = img("fld_h", 20, 20, 6, fill=C["panel2"], border=C["faint"])
+        f_f = img("fld_f", 20, 20, 6, fill=C["panel2"], border=C["acc"], bw=1.5)
+        f_d = img("fld_d", 20, 20, 6, fill=C["panel"], border=C["line"])
+        el("Fld.field", f_n, (("disabled", f_d), ("focus", f_f), ("hover", f_h)), border=7, sticky="nsew")
+        st.layout("TEntry", [("Fld.field", {"sticky": "nswe", "children": [
+            ("Entry.padding", {"sticky": "nswe", "children": [("Entry.textarea", {"sticky": "nswe"})]})]})])
+        el("Combo.field", f_n, (("disabled", f_d), ("focus", f_f), ("pressed", f_f), ("hover", f_h)),
+           border=7, sticky="nsew")
+        chev = [(7.0, 7.0), (11.0, 11.0), (15.0, 7.0)]
+        el("Combo.downarrow", img("chev", 24, 18, 0, mark=chev, mark_col=C["mut"], rect=(0, 0, 24, 18)),
+           (("disabled", img("chev_d", 24, 18, 0, mark=chev, mark_col=C["faint"], rect=(0, 0, 24, 18))),
+            ("hover", img("chev_h", 24, 18, 0, mark=chev, mark_col=C["fg"], rect=(0, 0, 24, 18)))),
+           sticky="")
+        st.layout("TCombobox", [("Combo.field", {"sticky": "nswe", "children": [
+            ("Combo.downarrow", {"side": "right", "sticky": "ns"}),
+            ("Combobox.padding", {"expand": "1", "sticky": "nswe", "children": [
+                ("Combobox.textarea", {"sticky": "nswe"})]})]})])
         for w in ("TEntry", "TCombobox", "TSpinbox"):
-            st.configure(w, fieldbackground=C["panel2"], foreground=C["fg"], insertcolor=C["fg"], padding=(8, 5),
-                         bordercolor=C["line"], lightcolor=C["panel2"], darkcolor=C["panel2"], arrowcolor=C["mut"],
-                         background=C["panel2"])
-            st.map(w, bordercolor=[("focus", C["acc"])], lightcolor=[("focus", C["acc"])],
-                   fieldbackground=[("readonly", C["panel2"])], foreground=[("readonly", C["fg"])],
-                   selectbackground=[("readonly", C["panel2"])], selectforeground=[("readonly", C["fg"])],
-                   arrowcolor=[("active", C["fg"])])
+            st.configure(w, fieldbackground=C["panel2"], foreground=C["fg"], insertcolor=C["fg"], padding=(10, 7),
+                         bordercolor=C["line2"], lightcolor=C["panel2"], darkcolor=C["panel2"], arrowcolor=C["mut"],
+                         background=C["panel2"], selectbackground=C["acc"], selectforeground=C["acc_fg"])
+            st.map(w, fieldbackground=[("readonly", C["panel2"])], foreground=[("disabled", C["faint"]),
+                                                                              ("readonly", C["fg"])],
+                   selectbackground=[("readonly", C["panel2"])], selectforeground=[("readonly", C["fg"])])
+        st.configure("TCombobox", padding=(10, 7, 2, 7))
         self.root.option_add("*TCombobox*Listbox.background", C["panel2"])
         self.root.option_add("*TCombobox*Listbox.foreground", C["fg"])
         self.root.option_add("*TCombobox*Listbox.selectBackground", C["acc"])
         self.root.option_add("*TCombobox*Listbox.selectForeground", C["acc_fg"])
         self.root.option_add("*TCombobox*Listbox.borderWidth", 0)
+        self.root.option_add("*TCombobox*Listbox.highlightThickness", 0)
+        self.root.option_add("*TCombobox*Listbox.activeStyle", "none")
+        self.root.option_add("*TCombobox*Listbox.font", f10)
         self.root.option_add("*Menu.background", C["panel2"])
         self.root.option_add("*Menu.foreground", C["fg"])
         self.root.option_add("*Menu.activeBackground", C["acc"])
-        for o in ("Vertical", "Horizontal"):
-            st.configure(f"{o}.TScrollbar", background=C["panel2"], troughcolor=C["panel"], bordercolor=C["panel"],
-                         arrowcolor=C["mut"], lightcolor=C["panel2"], darkcolor=C["panel2"], relief="flat",
-                         arrowsize=11, gripcount=0)
-            st.map(f"{o}.TScrollbar", background=[("active", C["line"])])
-        for w in ("TRadiobutton", "TCheckbutton"):
-            st.configure(w, background=C["panel"], foreground=C["fg"], indicatorbackground=C["panel2"],
-                         indicatorforeground=C["acc_fg"], indicatorrelief="flat", focusthickness=0)
-            st.map(w, background=[("active", C["panel"])], foreground=[("active", C["fg"])],
-                   indicatorbackground=[("selected", C["acc"]), ("active", C["hover"])])
-        st.configure("Horizontal.TScale", background=C["acc"], troughcolor=C["panel2"], bordercolor=C["line"],
-                     lightcolor=C["acc_hi"], darkcolor=C["acc"], sliderthickness=14, gripcount=0)
-        st.map("Horizontal.TScale", background=[("active", C["acc_hi"])])
+        self.root.option_add("*Menu.activeForeground", C["acc_fg"])
+        self.root.option_add("*Menu.relief", "flat")
+        self.root.option_add("*Menu.borderWidth", 0)
+        st.configure("ComboboxPopdownFrame", background=C["panel2"], bordercolor=C["line2"], lightcolor=C["line2"],
+                     darkcolor=C["line2"], borderwidth=1, relief="solid")
 
-    def _flat_button(self, parent, text, **kw):
-        """A flat accent tk.Button with hover (used where press/release events matter: hold to talk)."""
-        b = self.tk.Button(parent, text=text, bg=C["acc"], fg=C["acc_fg"], activebackground=C["acc_hi"],
-                           activeforeground=C["acc_fg"], relief="flat", bd=0, highlightthickness=0, cursor="hand2",
-                           font=self._font(11, True), padx=20, pady=9, **kw)
-        b.bind("<Enter>", lambda e: b.configure(bg=C["acc_hi"]))
-        b.bind("<Leave>", lambda e: b.configure(bg=C["acc"]))
+        # --- check boxes and radio buttons --------------------------------------------------------------------
+        box = (0, 0, 18, 18)
+        tick = [(4.6, 9.3), (7.7, 12.3), (13.4, 6.2)]
+        ck = lambda k, **kw: img(k, 26, 18, 5, rect=box, **kw)
+        el("Check.indicator", ck("ck_n", fill=C["panel2"], border=C["line2"]),
+           (("disabled selected", ck("ck_ds", fill=C["line"], mark=tick, mark_col=C["faint"], mark_w=2.0)),
+            ("disabled", ck("ck_d", fill=C["panel"], border=C["line"])),
+            ("selected active", ck("ck_sh", fill=C["acc_hi"], mark=tick, mark_col="#ffffff", mark_w=2.0)),
+            ("selected", ck("ck_s", fill=C["acc"], mark=tick, mark_col="#ffffff", mark_w=2.0)),
+            ("active", ck("ck_h", fill=C["hover"], border=C["faint"]))), sticky="w")
+        rd = lambda k, **kw: img(k, 26, 18, 9, rect=box, **kw)
+        el("Radio.indicator", rd("rd_n", fill=C["panel2"], border=C["line2"]),
+           (("disabled selected", rd("rd_ds", fill=C["line"], mark=("dot", 3.5), mark_col=C["faint"])),
+            ("disabled", rd("rd_d", fill=C["panel"], border=C["line"])),
+            ("selected active", rd("rd_sh", fill=C["acc_hi"], mark=("dot", 3.5), mark_col="#ffffff")),
+            ("selected", rd("rd_s", fill=C["acc"], mark=("dot", 3.5), mark_col="#ffffff")),
+            ("active", rd("rd_h", fill=C["hover"], border=C["faint"]))), sticky="w")
+        for w, ind in (("TCheckbutton", "Check.indicator"), ("TRadiobutton", "Radio.indicator")):
+            st.layout(w, [("Checkbutton.padding", {"sticky": "nswe", "children": [
+                (ind, {"side": "left", "sticky": ""}),
+                ("Checkbutton.label", {"side": "left", "expand": "1", "sticky": "nswe"})]})])
+            st.configure(w, background=C["panel"], foreground=C["fg"], padding=(0, 3), focusthickness=0)
+            st.map(w, background=[("active", C["panel"])], foreground=[("disabled", C["faint"]),
+                                                                       ("active", C["fg"])])
+
+        # --- tables -----------------------------------------------------------------------------------------
+        st.configure("Treeview", background=C["panel"], fieldbackground=C["panel"], foreground=C["fg"], rowheight=34,
+                     borderwidth=0, relief="flat", bordercolor=C["panel"], lightcolor=C["panel"],
+                     darkcolor=C["panel"])
+        st.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+        el("Head.cell", img("head", 8, 8, 0, fill=C["panel"], bar=(C["line"], 1)),
+           (("active", img("head_h", 8, 8, 0, fill=C["hover"], bar=(C["line"], 1))),),
+           border=(1, 1, 1, 2), sticky="nsew")
+        st.layout("Treeview.Heading", [("Head.cell", {"sticky": "nswe", "children": [
+            ("Treeheading.padding", {"sticky": "nswe", "children": [
+                ("Treeheading.image", {"side": "right", "sticky": ""}),
+                ("Treeheading.text", {"sticky": "we"})]})]})])
+        st.configure("Treeview.Heading", background=C["panel"], foreground=C["mut"], relief="flat",
+                     padding=(10, 8), font=self._font(9, True), borderwidth=0)
+        st.map("Treeview", background=[("selected", C["sel"])], foreground=[("selected", C["fg"])])
+
+        # --- scrollbars and sliders -------------------------------------------------------------------------
+        for bgk, pre in (("panel", ""), ("bg", "Bg.")):
+            tr = img(f"sb_tr_{bgk}", 12, 12, 0, fill=C[bgk], bar=(C[bgk], 1))
+            el(f"{pre}SbV.trough", tr, border=2, sticky="nsew")
+            el(f"{pre}SbH.trough", tr, border=2, sticky="nsew")
+            st.layout(f"{pre}Vertical.TScrollbar", [(f"{pre}SbV.trough", {"sticky": "ns", "children": [
+                ("SbV.thumb", {"expand": "1", "sticky": "nswe"})]})])
+            st.layout(f"{pre}Horizontal.TScrollbar", [(f"{pre}SbH.trough", {"sticky": "ew", "children": [
+                ("SbH.thumb", {"expand": "1", "sticky": "nswe"})]})])
+        el("SbV.thumb", img("sbv", 12, 20, 3, fill=C["line2"], rect=(3, 2, 9, 18)),
+           (("pressed", img("sbv_p", 12, 20, 3, fill=C["mut"], rect=(3, 2, 9, 18))),
+            ("active", img("sbv_h", 12, 20, 3, fill=C["faint"], rect=(3, 2, 9, 18)))),
+           border=(0, 6, 0, 6), sticky="nsew")
+        el("SbH.thumb", img("sbh", 20, 12, 3, fill=C["line2"], rect=(2, 3, 18, 9)),
+           (("pressed", img("sbh_p", 20, 12, 3, fill=C["mut"], rect=(2, 3, 18, 9))),
+            ("active", img("sbh_h", 20, 12, 3, fill=C["faint"], rect=(2, 3, 18, 9)))),
+           border=(6, 0, 6, 0), sticky="nsew")
+        el("Scale.trough", img("sc_tr", 16, 18, 2, fill=C["line2"], rect=(0, 7, 16, 11)),
+           border=(4, 0, 4, 0), sticky="ew")
+        el("Scale.slider", img("sc_kn", 18, 18, 9, fill=C["fg"], border=C["acc"], bw=2.5),
+           (("pressed", img("sc_kn_p", 18, 18, 9, fill="#ffffff", border=C["acc_hi"], bw=3)),
+            ("active", img("sc_kn_h", 18, 18, 9, fill="#ffffff", border=C["acc_hi"], bw=2.5))), sticky="")
+        st.layout("Horizontal.TScale", [("Scale.trough", {"sticky": "ew", "children": [
+            ("Scale.slider", {"side": "left", "sticky": ""})]})])
+        st.configure("Horizontal.TScale", background=C["panel"])
+        st.configure("Horizontal.TSeparator", background=C["line"])
+
+    def _flat_button(self, parent, text, bg=None, **kw):
+        """A rounded accent button made from a tk.Label (used where press/release events matter: hold to talk)."""
+        import tkinter.font as tkfont
+        font = self._font(11, True)
+        w = tkfont.Font(root=self.root, font=font).measure(text) + 48
+        h = 42
+        imgs = {k: self._img(f"flat_{k}_{w}", w, h, 9, fill=col)
+                for k, col in (("n", C["acc"]), ("h", C["acc_hi"]), ("p", C["acc_lo"]))}
+        b = self.tk.Label(parent, text=text, image=imgs["n"], compound="center", fg=C["acc_fg"],
+                          bg=bg or C["panel"], bd=0, highlightthickness=0, cursor="hand2", font=font, **kw)
+        b._imgs = imgs
+        b._over = False
+
+        def show(k):
+            b.configure(image=imgs[k])
+        b.bind("<Enter>", lambda e: (setattr(b, "_over", True), show("h")), add="+")
+        b.bind("<Leave>", lambda e: (setattr(b, "_over", False), show("n")), add="+")
+        b.bind("<ButtonPress-1>", lambda e: show("p"), add="+")
+        b.bind("<ButtonRelease-1>", lambda e: show("h" if b._over else "n"), add="+")
         return b
 
     def _scroll_area(self, parent):
         """A frame that scrolls vertically (mouse wheel or scrollbar) only when the window is too short for it."""
         tk, ttk = self.tk, self.ttk
         outer = ttk.Frame(parent)
-        outer.pack(fill="both", expand=True, pady=(10, 0))
+        outer.pack(fill="both", expand=True, pady=(16, 0))
         cv = tk.Canvas(outer, bg=C["bg"], highlightthickness=0, bd=0, height=200)
-        sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
+        sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview, style="Bg.Vertical.TScrollbar")
         cv.configure(yscrollcommand=sb.set)
         cv.pack(side="left", fill="both", expand=True)
         inner = ttk.Frame(cv)
@@ -14374,7 +14601,7 @@ class App:
 
     def _layout(self):
         tk, ttk = self.tk, self.ttk
-        top = ttk.Frame(self.root, padding=(18, 14, 18, 6), style="Bar.TFrame")
+        top = ttk.Frame(self.root, padding=(22, 16, 22, 4), style="Bar.TFrame")
         top.pack(fill="x")
         if self._icon_img is not None:
             try:
@@ -14387,8 +14614,8 @@ class App:
         ttk.Label(title, text="SimCoach", style="H.TLabel").pack(anchor="w")
         ttk.Label(title, text=f"Race coach  ·  engineer  ·  strategist  ·  spotter  ·  v{APP_VERSION}",
                   style="BgMut.TLabel").pack(anchor="w")
-        pill = ttk.Frame(top, style="Pill.TFrame", padding=(10, 5))
-        pill.pack(side="left", padx=(22, 0))
+        pill = ttk.Frame(top, style="Pill.TFrame", padding=(12, 5, 14, 5))
+        pill.pack(side="left", padx=(24, 0))
         self.dot = tk.Canvas(pill, width=10, height=10, bg=C["panel2"], highlightthickness=0)
         self.dot.pack(side="left", padx=(0, 7))
         self.dot_id = self.dot.create_oval(1, 1, 9, 9, fill=C["mut"], outline="")
@@ -14396,21 +14623,24 @@ class App:
         self.status_lbl.pack(side="left")
         self.start_btn = ttk.Button(top, text="Start coaching", style="Accent.TButton", command=self.toggle)
         self.start_btn.pack(side="right")
-        ttk.Button(top, text="Overlay", command=self.toggle_overlay).pack(side="right", padx=8)
-        ttk.Button(top, text="Phone screen", command=self.phone_screen_dialog).pack(side="right")
-        self.view_btn = ttk.Button(top, text="Show everything", command=self.toggle_view)
-        self.view_btn.pack(side="right", padx=8)
+        tk.Frame(top, width=1, height=22, bg=C["line2"]).pack(side="right", padx=(14, 14))
+        ttk.Button(top, text="Overlay", style="Outline.TButton", command=self.toggle_overlay).pack(side="right")
+        ttk.Button(top, text="Phone screen", style="Outline.TButton",
+                   command=self.phone_screen_dialog).pack(side="right", padx=8)
         self.ov_lock_btn = ttk.Button(top, text="Unlock overlay" if self.cfg.get("overlay_locked") else "Lock overlay",
-                                      command=self.toggle_overlay_lock)
+                                      style="Ghost.TButton", command=self.toggle_overlay_lock)
         self.ov_lock_btn.pack(side="right")
+        self.view_btn = ttk.Button(top, text="Show everything", style="Ghost.TButton", command=self.toggle_view)
+        self.view_btn.pack(side="right", padx=(0, 2))
 
         nb = self.nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=18, pady=(10, 18))
+        nb.pack(fill="both", expand=True, padx=22, pady=(8, 20))
         tabs = [("Live", "tab_live"), ("Radio check", "tab_radio"), ("Laps & corners", "tab_laps"),
                 ("Settings", "tab_set"), ("References", "tab_ref"), ("Best laps", "tab_best"), ("Reports", "tab_rep"),
                 ("Log", "tab_log")]
         for name, attr in tabs:
             f = ttk.Frame(nb)
+            tk.Frame(f, height=1, bg=C["line"]).pack(fill="x")    # hairline under the tab strip
             setattr(self, attr, f)
             nb.add(f, text=name)
         self._live()
@@ -14489,28 +14719,31 @@ class App:
     def _live(self):
         tk, ttk = self.tk, self.ttk
         t = self.tab_live
-        head = self._card(t, fill="x", pady=(10, 8))
+        head = self._card(t, fill="x", pady=(16, 8))
         self.head_lbl = ttk.Label(head, text="Press Start coaching, then go on track in any supported sim.", style="Mut.TLabel")
         self.head_lbl.pack(anchor="w")
 
         row = ttk.Frame(t)
         row.pack(fill="x")
         dcard = self._card(row, side="left", fill="both", expand=True, padx=(0, 8))
-        ttk.Label(dcard, text="LIVE DELTA TO BEST", style="Mut.TLabel").pack(anchor="w")
-        self.delta_lbl = tk.Label(dcard, text="--.--", bg=C["panel"], fg=C["fg"], font=self._font(54, True))
-        self.delta_lbl.pack(anchor="w")
+        ttk.Label(dcard, text="LIVE DELTA TO BEST", style="Cap.TLabel").pack(anchor="w")
+        self.delta_lbl = tk.Label(dcard, text="\u2014", bg=C["panel"], fg=C["faint"],
+                                  font=self._font(54, True))
+        self.delta_lbl.pack(anchor="w", pady=(6, 0))
         kcard = self._card(row, side="left", fill="both", expand=True)
         self.kpi = {}
         for k, label in (("last", "Last lap"), ("best", "Best lap"), ("theo", "Theoretical best"), ("laps", "Laps"),
                          ("pace", "Pace vs target"), ("cons", "Consistency")):
             f = ttk.Frame(kcard, style="Card.TFrame")
-            f.pack(fill="x", pady=3)
-            ttk.Label(f, text=label, style="Mut.TLabel", width=18).pack(side="left")
+            f.pack(fill="x", pady=(3, 4))
+            ttk.Label(f, text=label, style="Mut.TLabel").pack(side="left")
             self.kpi[k] = ttk.Label(f, text="—", style="Card.TLabel", font=self._font(14, True))
-            self.kpi[k].pack(side="left")
+            self.kpi[k].pack(side="right")
+            if k != "cons":
+                tk.Frame(kcard, height=1, bg=C["line"]).pack(fill="x")
 
         tcard = self._card(t, fill="x", pady=8)
-        ttk.Label(tcard, text="COACH", style="Mut.TLabel").pack(anchor="w")
+        ttk.Label(tcard, text="COACH", style="Cap.TLabel").pack(anchor="w")
         self.tip_lbl = tk.Label(tcard, text="—", bg=C["panel"], fg=C["tip"], font=self._font(15), wraplength=1040,
                                 justify="left", anchor="w")
         self.tip_lbl.pack(fill="x", anchor="w")
@@ -14544,7 +14777,7 @@ class App:
         """Talk to the engineer before launching a sim and see every step of the round trip."""
         tk, ttk = self.tk, self.ttk
         t = self.tab_radio
-        head = self._card(t, fill="x", pady=(10, 8))
+        head = self._card(t, fill="x", pady=(16, 8))
         ttk.Label(head, text="Radio check", style="Sec.TLabel").pack(anchor="w")
         ttk.Label(head, style="Mut.TLabel", wraplength=1040, justify="left",
                   text="Works without a sim. Hold your push-to-talk (wheel button, F8 or the button below), speak, "
@@ -14574,7 +14807,7 @@ class App:
         chat = self._card(t, fill="both", expand=True, pady=8)
         top = ttk.Frame(chat, style="Card.TFrame")
         top.pack(fill="x")
-        ttk.Label(top, text="CONVERSATION", style="Mut.TLabel").pack(side="left")
+        ttk.Label(top, text="CONVERSATION", style="Cap.TLabel").pack(side="left")
         self.rc_rt = ttk.Label(top, text="", style="Mut.TLabel")
         self.rc_rt.pack(side="right")
         self.rc_txt = tk.Text(chat, bg=C["panel"], fg=C["fg"], insertbackground=C["fg"], relief="flat", bd=0, highlightthickness=0,
@@ -14683,8 +14916,8 @@ class App:
 
     def _tree(self, parent, cols, widths, height=8):
         ttk = self.ttk
-        f = ttk.Frame(parent, style="CardBox.TFrame", padding=1)
-        f.pack(fill="both", expand=True, pady=(4, 10))
+        f = ttk.Frame(parent, style="CardBox.TFrame", padding=(5, 4, 4, 5))
+        f.pack(fill="both", expand=True, pady=(6, 12))
         tv = ttk.Treeview(f, columns=[c for c, _ in cols], show="headings", height=height)
         for (c, h), w in zip(cols, widths):
             tv.heading(c, text=h, anchor="w")
@@ -14698,9 +14931,9 @@ class App:
     def _laps(self):
         ttk = self.ttk
         t = self.tab_laps
-        ttk.Label(t, text="Laps this session").pack(anchor="w", pady=(10, 0))
+        ttk.Label(t, text="Laps this session", style="SecBg.TLabel").pack(anchor="w", pady=(14, 0))
         self.laps_tv = self._tree(t, [("n", "Lap"), ("time", "Time"), ("gap", "Gap to best")], (80, 160, 160))
-        ttk.Label(t, text="Turn by turn (last lap vs your best)").pack(anchor="w")
+        ttk.Label(t, text="Turn by turn (last lap vs your best)", style="SecBg.TLabel").pack(anchor="w", pady=(4, 0))
         self.turns_tv = self._tree(t, [("turn", "Corner"), ("loss", "Last lap loss"), ("vmin", "Best min speed"),
                                        ("issue", "Latest issue")], (90, 120, 130, 600))
 
@@ -14958,7 +15191,7 @@ class App:
         self.saved_lbl.pack(side="left", padx=12)
         ttk.Button(foot, text="Open log file", command=lambda: self._open(LOG_PATH)).pack(side="right")
         ttk.Button(foot, text="Create desktop shortcut", command=self.make_shortcut).pack(side="right", padx=8)
-        self.adv_note = ttk.Label(foot, text="More settings: Show everything (top right)", style="Mut.TLabel")
+        self.adv_note = ttk.Label(foot, text="More settings: Show everything (top right)", style="BgMut.TLabel")
         self.adv_note.pack(side="left", padx=12)
         ttk.Button(foot, text="Quick setup", command=self._ask_name).pack(side="right")
         self.root.after(300, self.refresh_devices)
@@ -14967,7 +15200,7 @@ class App:
         ttk = self.ttk
         t = self.tab_ref
         bar = ttk.Frame(t)
-        bar.pack(fill="x", pady=(10, 4))
+        bar.pack(fill="x", pady=(16, 4))
         ttk.Button(bar, text="Delete selected", command=self.delete_ref).pack(side="left")
         ttk.Button(bar, text="Export…", command=self.export_ref).pack(side="left", padx=8)
         ttk.Button(bar, text="Import…", command=self.import_ref).pack(side="left")
@@ -15082,7 +15315,7 @@ class App:
         ttk = self.ttk
         t = self.tab_best
         bar = ttk.Frame(t)
-        bar.pack(fill="x", pady=(10, 4))
+        bar.pack(fill="x", pady=(16, 4))
         ttk.Button(bar, text="Share selected", style="Accent.TButton",
                    command=lambda: self.share_best(list(self.best_tv.selection()))).pack(side="left")
         ttk.Button(bar, text="Share all new", command=self.share_all_best).pack(side="left", padx=8)
@@ -15477,7 +15710,7 @@ class App:
         ttk = self.ttk
         t = self.tab_rep
         bar = ttk.Frame(t)
-        bar.pack(fill="x", pady=(10, 4))
+        bar.pack(fill="x", pady=(16, 4))
         ttk.Button(bar, text="Open selected", style="Accent.TButton", command=self.open_report).pack(side="left")
         ttk.Button(bar, text="Open folder", command=lambda: self._open(ensure_report_dir())).pack(side="left", padx=8)
         ttk.Button(bar, text="Write report now", command=self.write_report_now).pack(side="left")
@@ -15493,7 +15726,7 @@ class App:
     def _log(self):
         tk, ttk = self.tk, self.ttk
         bar = ttk.Frame(self.tab_log)
-        bar.pack(fill="x", pady=(10, 0))
+        bar.pack(fill="x", pady=(16, 0))
         self.cap_btn = ttk.Button(bar, text=f"Capture {CAPTURE_DEFAULT_S} s of game data", command=self._capture_click)
         self.cap_btn.pack(side="left")
         ttk.Button(bar, text="Open captures folder", command=self._open_captures).pack(side="left", padx=8)
@@ -15759,8 +15992,9 @@ class App:
         steps = ttk.Label(box, wraplength=440, justify="left", text="")
         steps.pack(anchor="w")
         qr = tk.Canvas(box, width=10, height=10, bg="white", highlightthickness=0)
-        addr = tk.Entry(box, font=("Segoe UI", 13, "bold"), width=36, relief="flat", readonlybackground=C["panel2"],
-                        fg=C["fg"], justify="center")
+        addr = tk.Entry(box, font=self._font(13, True), width=36, relief="flat", readonlybackground=C["panel2"],
+                        fg=C["fg"], justify="center", bd=6, highlightthickness=1, highlightbackground=C["line2"],
+                        highlightcolor=C["acc"])
         note = ttk.Label(box, wraplength=440, justify="left", style="BgMut.TLabel", text="")
         btns = ttk.Frame(box)
         onoff = ttk.Button(btns, text="")
@@ -16611,7 +16845,9 @@ class App:
         if merged:
             if "delta" in merged:
                 col = merged.get("delta_color", C["fg"])
-                self.delta_lbl.configure(text=merged["delta"], fg=col)
+                idle = merged["delta"] == "--.--"
+                self.delta_lbl.configure(text="\u2014" if idle else merged["delta"],
+                                         fg=C["faint"] if idle else col)
                 self._ov_set_text(delta=merged["delta"], color=col)
             if "tip" in merged:
                 tip = self._pretty(merged["tip"])
