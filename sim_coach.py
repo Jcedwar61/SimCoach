@@ -69,7 +69,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.19"
+APP_VERSION = "6.20"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -12452,9 +12452,32 @@ def _seg_dist(px_, py_, ax, ay, bx, by):
 
 
 def _ui_shape(w, h, r, fill=None, border=None, bw=1.0, inset=0.0, mark=None, mark_col=None, mark_w=1.6, bar=None,
-              rect=None):
+              rect=None, under=None):
     """One theme image: a rounded rectangle (fill and/or border, None = transparent) on a transparent canvas, plus
-    optional polyline `mark` (checkmark, chevron) or dot, or `bar` = (colour, height) along the bottom edge."""
+    optional polyline `mark` (checkmark, chevron) or dot, or `bar` = (colour, height) along the bottom edge.
+    `under`: a solid colour to flatten it onto, making it opaque (opaque images redraw much faster in Tk)."""
+    if under:
+        ur = _rgb(under)
+        shape = _ui_shape(w, h, r, fill, border, bw, inset, mark, mark_col, mark_w, bar, rect)
+        import base64
+        import zlib
+        # decode our own PNG (filter 0 rows, RGBA) and blend each pixel onto `under`
+        data = base64.b64decode(shape)
+        idat = b""
+        i = 8
+        while i < len(data):
+            n = struct.unpack(">I", data[i:i + 4])[0]
+            if data[i + 4:i + 8] == b"IDAT":
+                idat += data[i + 8:i + 8 + n]
+            i += 12 + n
+        raw = zlib.decompress(idat)
+        stride = w * 4 + 1
+
+        def px2(x, y):
+            o = y * stride + 1 + x * 4
+            rr, gg, bb, aa = (v / 255 for v in raw[o:o + 4])
+            return (rr * aa + ur[0] * (1 - aa), gg * aa + ur[1] * (1 - aa), bb * aa + ur[2] * (1 - aa), 1.0)
+        return _png_b64(w, h, px2)
     fc, bc = (_rgb(fill) if fill else None), (_rgb(border) if border else None)
     mc = _rgb(mark_col) if mark_col else None
 
@@ -14334,6 +14357,27 @@ class App:
             cache[key] = self.tk.PhotoImage(master=self.root, data=_ui_shape(*a, **kw))
         return cache[key]
 
+    def _grow(self, im, border, w, h):
+        """A copy of a 9-slice image enlarged to at least w x h, keeping its border slices (done natively by Tk)."""
+        cache = self.__dict__.setdefault("_grown", {})
+        key = (str(im), w, h)
+        if key in cache:
+            return cache[key]
+        iw, ih = im.width(), im.height()
+        W, H = max(iw, w), max(ih, h)
+        if (W, H) == (iw, ih):
+            return im
+        l, t, r, b = border if len(border) == 4 else (border[0], border[1], border[0], border[1])
+        big = self.tk.PhotoImage(master=self.root, width=W, height=H)
+        xs = ((0, l, 0, l), (l, iw - r, l, W - r), (iw - r, iw, W - r, W))
+        ys = ((0, t, 0, t), (t, ih - b, t, H - b), (ih - b, ih, H - b, H))
+        for sx0, sx1, dx0, dx1 in xs:
+            for sy0, sy1, dy0, dy1 in ys:
+                if sx1 > sx0 and sy1 > sy0 and dx1 > dx0 and dy1 > dy0:
+                    big.tk.call(big, "copy", im, "-from", sx0, sy0, sx1, sy1, "-to", dx0, dy0, dx1, dy1)
+        cache[key] = big
+        return big
+
     def _style(self):
         """Flat, modern, always-dark ttk theme: a child of clam whose buttons, fields, cards, tabs, checkboxes,
         sliders and scrollbars are anti-aliased rounded images (drawn at start-up, no image files needed)."""
@@ -14351,8 +14395,21 @@ class App:
                      insertcolor=C["fg"])
         st.map(".", foreground=[("disabled", C["faint"])])
 
-        def el(name, base, states=(), **kw):
+        def el(name, base, states=(), grow=(640, 72), **kw):
+            # Tk fills a stretched image element by repeating its centre, one small copy at a time, on every
+            # redraw: a tiny centre on a big widget means thousands of copies (seconds per tab switch). So each
+            # image is enlarged once, here, to cover the widget in one piece.
             kw.setdefault("padding", 0)
+            b = kw.get("border", 0)
+            b = (b,) * 4 if isinstance(b, int) else tuple(b) + tuple(b)[:4 - len(b)] if len(b) < 4 else tuple(b)
+            sticky = kw.get("sticky", "")
+            gw = grow[0] if grow and "e" in sticky and "w" in sticky else 0
+            gh = grow[1] if grow and "n" in sticky and "s" in sticky else 0
+            if gw or gh:          # only along the directions the element stretches
+                kw.setdefault("width", base.width())       # ...but still asks for the small image's size
+                kw.setdefault("height", base.height())
+                base = self._grow(base, b, gw, gh)
+                states = tuple((sp, self._grow(im, b, gw, gh)) for sp, im in states)
             try:
                 st.element_create(name, "image", base, *states, **kw)
             except Exception:
@@ -14361,11 +14418,12 @@ class App:
         # --- surfaces ---------------------------------------------------------------------------------------
         st.configure("TFrame", background=C["bg"])
         st.configure("Card.TFrame", background=C["panel"], borderwidth=0)
-        el("Card.bg", img("card", 28, 28, 10, fill=C["panel"], border=C["line"]), border=12, sticky="nsew")
+        el("Card.bg", img("card", 28, 28, 10, fill=C["panel"], border=C["line"], under=C["bg"]), border=12, sticky="nsew",
+           grow=(1920, 1080))
         st.layout("CardBox.TFrame", [("Card.bg", {"sticky": "nswe"})])
         st.configure("CardBox.TFrame", background=C["bg"])
         st.configure("Bar.TFrame", background=C["bg"])
-        el("Pill.bg", img("pill", 32, 28, 13, fill=C["panel2"], border=C["line2"]), border=(14, 13, 14, 13), sticky="nsew")
+        el("Pill.bg", img("pill", 32, 28, 13, fill=C["panel2"], border=C["line2"], under=C["bg"]), border=(14, 13, 14, 13), sticky="nsew")
         st.layout("Pill.TFrame", [("Pill.bg", {"sticky": "nswe"})])
         st.configure("Pill.TFrame", background=C["bg"])
 
@@ -14419,20 +14477,20 @@ class App:
         st.configure("Small.TButton", padding=(12, 4))
 
         # --- fields -----------------------------------------------------------------------------------------
-        fld = dict(fill=C["panel2"], border=C["line2"])
-        f_n = img("fld_n", 20, 20, 6, **fld)
-        f_h = img("fld_h", 20, 20, 6, fill=C["panel2"], border=C["faint"])
-        f_f = img("fld_f", 20, 20, 6, fill=C["panel2"], border=C["acc"], bw=1.5)
-        f_d = img("fld_d", 20, 20, 6, fill=C["panel"], border=C["line"])
+        u = C["panel"]           # fields and check boxes sit on cards: flattened onto the card colour (faster)
+        f_n = img("fld_n", 20, 20, 6, fill=C["panel2"], border=C["line2"], under=u)
+        f_h = img("fld_h", 20, 20, 6, fill=C["panel2"], border=C["faint"], under=u)
+        f_f = img("fld_f", 20, 20, 6, fill=C["panel2"], border=C["acc"], bw=1.5, under=u)
+        f_d = img("fld_d", 20, 20, 6, fill=C["panel"], border=C["line"], under=u)
         el("Fld.field", f_n, (("disabled", f_d), ("focus", f_f), ("hover", f_h)), border=7, sticky="nsew")
         st.layout("TEntry", [("Fld.field", {"sticky": "nswe", "children": [
             ("Entry.padding", {"sticky": "nswe", "children": [("Entry.textarea", {"sticky": "nswe"})]})]})])
         el("Combo.field", f_n, (("disabled", f_d), ("focus", f_f), ("pressed", f_f), ("hover", f_h)),
            border=7, sticky="nsew")
         chev = [(7.0, 7.0), (11.0, 11.0), (15.0, 7.0)]
-        el("Combo.downarrow", img("chev", 24, 18, 0, mark=chev, mark_col=C["mut"], rect=(0, 0, 24, 18)),
-           (("disabled", img("chev_d", 24, 18, 0, mark=chev, mark_col=C["faint"], rect=(0, 0, 24, 18))),
-            ("hover", img("chev_h", 24, 18, 0, mark=chev, mark_col=C["fg"], rect=(0, 0, 24, 18)))),
+        el("Combo.downarrow", img("chev", 24, 18, 0, mark=chev, mark_col=C["mut"], rect=(0, 0, 24, 18), under=C["panel2"]),
+           (("disabled", img("chev_d", 24, 18, 0, mark=chev, mark_col=C["faint"], rect=(0, 0, 24, 18), under=C["panel"])),
+            ("hover", img("chev_h", 24, 18, 0, mark=chev, mark_col=C["fg"], rect=(0, 0, 24, 18), under=C["panel2"]))),
            sticky="")
         st.layout("TCombobox", [("Combo.field", {"sticky": "nswe", "children": [
             ("Combo.downarrow", {"side": "right", "sticky": "ns"}),
@@ -14466,14 +14524,14 @@ class App:
         # --- check boxes and radio buttons --------------------------------------------------------------------
         box = (0, 0, 18, 18)
         tick = [(4.6, 9.3), (7.7, 12.3), (13.4, 6.2)]
-        ck = lambda k, **kw: img(k, 26, 18, 5, rect=box, **kw)
+        ck = lambda k, **kw: img(k, 26, 18, 5, rect=box, under=u, **kw)
         el("Check.indicator", ck("ck_n", fill=C["panel2"], border=C["line2"]),
            (("disabled selected", ck("ck_ds", fill=C["line"], mark=tick, mark_col=C["faint"], mark_w=2.0)),
             ("disabled", ck("ck_d", fill=C["panel"], border=C["line"])),
             ("selected active", ck("ck_sh", fill=C["acc_hi"], mark=tick, mark_col="#ffffff", mark_w=2.0)),
             ("selected", ck("ck_s", fill=C["acc"], mark=tick, mark_col="#ffffff", mark_w=2.0)),
             ("active", ck("ck_h", fill=C["hover"], border=C["faint"]))), sticky="w")
-        rd = lambda k, **kw: img(k, 26, 18, 9, rect=box, **kw)
+        rd = lambda k, **kw: img(k, 26, 18, 9, rect=box, under=u, **kw)
         el("Radio.indicator", rd("rd_n", fill=C["panel2"], border=C["line2"]),
            (("disabled selected", rd("rd_ds", fill=C["line"], mark=("dot", 3.5), mark_col=C["faint"])),
             ("disabled", rd("rd_d", fill=C["panel"], border=C["line"])),
@@ -14493,7 +14551,8 @@ class App:
                      borderwidth=0, relief="flat", bordercolor=C["panel"], lightcolor=C["panel"],
                      darkcolor=C["panel"])
         st.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
-        el("Head.cell", img("head", 8, 8, 0, fill=C["panel"], bar=(C["line"], 1)),
+        el("Head.cell", img("head", 8, 8, 0, fill=C["panel"], bar=(C["line"], 1)), grow=(1200, 40),
+           states=
            (("active", img("head_h", 8, 8, 0, fill=C["hover"], bar=(C["line"], 1))),),
            border=(1, 1, 1, 2), sticky="nsew")
         st.layout("Treeview.Heading", [("Head.cell", {"sticky": "nswe", "children": [
@@ -14507,8 +14566,8 @@ class App:
         # --- scrollbars and sliders -------------------------------------------------------------------------
         for bgk, pre in (("panel", ""), ("bg", "Bg.")):
             tr = img(f"sb_tr_{bgk}", 12, 12, 0, fill=C[bgk], bar=(C[bgk], 1))
-            el(f"{pre}SbV.trough", tr, border=2, sticky="nsew")
-            el(f"{pre}SbH.trough", tr, border=2, sticky="nsew")
+            el(f"{pre}SbV.trough", tr, border=2, sticky="nsew", grow=(12, 1400))
+            el(f"{pre}SbH.trough", tr, border=2, sticky="nsew", grow=(1920, 12))
             st.layout(f"{pre}Vertical.TScrollbar", [(f"{pre}SbV.trough", {"sticky": "ns", "children": [
                 ("SbV.thumb", {"expand": "1", "sticky": "nswe"})]})])
             st.layout(f"{pre}Horizontal.TScrollbar", [(f"{pre}SbH.trough", {"sticky": "ew", "children": [
@@ -14516,11 +14575,11 @@ class App:
         el("SbV.thumb", img("sbv", 12, 20, 3, fill=C["line2"], rect=(3, 2, 9, 18)),
            (("pressed", img("sbv_p", 12, 20, 3, fill=C["mut"], rect=(3, 2, 9, 18))),
             ("active", img("sbv_h", 12, 20, 3, fill=C["faint"], rect=(3, 2, 9, 18)))),
-           border=(0, 6, 0, 6), sticky="nsew")
+           border=(0, 6, 0, 6), sticky="nsew", grow=(12, 1400))
         el("SbH.thumb", img("sbh", 20, 12, 3, fill=C["line2"], rect=(2, 3, 18, 9)),
            (("pressed", img("sbh_p", 20, 12, 3, fill=C["mut"], rect=(2, 3, 18, 9))),
             ("active", img("sbh_h", 20, 12, 3, fill=C["faint"], rect=(2, 3, 18, 9)))),
-           border=(6, 0, 6, 0), sticky="nsew")
+           border=(6, 0, 6, 0), sticky="nsew", grow=(1400, 12))
         el("Scale.trough", img("sc_tr", 16, 18, 2, fill=C["line2"], rect=(0, 7, 16, 11)),
            border=(4, 0, 4, 0), sticky="ew")
         el("Scale.slider", img("sc_kn", 18, 18, 9, fill=C["fg"], border=C["acc"], bw=2.5),
