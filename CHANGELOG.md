@@ -2,6 +2,14 @@
 
 Every release, newest first. The README has the latest one.
 
+## What's new in 6.19
+* **A refined look:** the SimCoach window has been redesigned. Buttons, text boxes, drop-downs, cards,
+  check boxes, sliders and scroll bars are now smooth and rounded; the tabs are clean labels with an
+  underline on the one you're in; the top bar is calmer, with *Start coaching* standing out as the one main
+  action; tables are roomier; and the Live tab lists your lap stats in a tidy column.
+* **Welcome box:** the first-run quick setup opens in the middle of the window and takes the keyboard, so you
+  can type your name straight away.
+
 ## What's new in 6.18
 * **Session goals:** when a session ends, the one or two corners that cost you the most time per clean lap
   become the goal for your next session with that car and track. The coach names the goal in its opening
