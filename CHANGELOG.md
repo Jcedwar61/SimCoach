@@ -2,6 +2,17 @@
 
 Every release, newest first. The README has the latest one.
 
+## What's new in 6.18
+* **Session goals:** when a session ends, the one or two corners that cost you the most time per clean lap
+  become the goal for your next session with that car and track. The coach names the goal in its opening
+  call, makes those corners your first focus corners, shows how each is going against last session on the
+  Live tab, and says *"Goal done"* once you're quicker there over three clean laps. The Coach Report has a
+  *Goal from last session* table, the AI analysis sees it, and you can ask *"what's my goal?"*.
+* **Simple view:** new installs show only the coaching essentials (four tabs and the everyday settings);
+  *Show everything* brings back every tab and setting. Copies updated from an earlier version keep showing
+  everything until you click *Simple view*.
+* **A shorter README:** the release history has moved to [CHANGELOG.md](CHANGELOG.md).
+
 ## What's new in 6.17
 * **A provider for each AI job:** *Settings → Who does what* sends radio answers, crew banter, setup briefings, the session analysis and command understanding each to OpenAI, Google Gemini or DeepSeek. Use DeepSeek for the frequent, cheap banter and OpenAI for answers, for example. A job whose provider has no key uses the main one, and the fallback still covers outages. Any saved key now switches the AI features on, not only the main provider's.
 * **The coach's analysis in every report:** with an AI key, each Coach Report and after-race text gets a written verdict, what went well, where the time goes and a practice plan, from the session's corners, laps and your earlier sessions. It's added a few seconds after the report is written. After a race the coach also reads out the verdict and the first thing to practise. Switch it off in Settings.
