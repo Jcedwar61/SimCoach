@@ -95,6 +95,16 @@ def run():
             pump(0.2)
             check(app._setup_win is None and not [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"
                                                   and w.title() == "Welcome to SimCoach"], "Finish closes it")
+        # redraw speed: the themed images must not make the window slow (6.19 took seconds per tab switch)
+        start = time.perf_counter()
+        for _ in range(2):
+            for tab in app.nb.tabs():
+                app.nb.select(tab)
+                root.update()
+        per_tab = (time.perf_counter() - start) / (2 * len(app.nb.tabs()))
+        check(per_tab < 0.25, f"tabs switch quickly ({per_tab * 1000:.0f} ms each)")
+        app.nb.select(app.tab_live)
+        root.update()
         # settings: provider switching and saving
         check(app.vars["ai_provider"].get() == "Google Gemini" and app.model_combo.get() == "gemini-3.5-flash", "Gemini shown")
         check(app.vars["coach_personality"].get().startswith("Exit"), "old personality key shows its new name")

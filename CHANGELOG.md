@@ -2,6 +2,11 @@
 
 Every release, newest first. The README has the latest one.
 
+## What's new in 6.20
+* **Fixes the slow window in 6.19:** switching tabs, scrolling and resizing had become very slow (seconds per
+  tab on some PCs) because of how 6.19 drew its new rounded controls. They're prepared once at start-up now, so
+  the window responds at normal speed again, with the same new look.
+
 ## What's new in 6.19
 * **A refined look:** the SimCoach window has been redesigned. Buttons, text boxes, drop-downs, cards,
   check boxes, sliders and scroll bars are now smooth and rounded; the tabs are clean labels with an
