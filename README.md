@@ -7,7 +7,7 @@ corners that matter, a diagnosis as you exit them, one thing to work on after ea
 when you stop. Then it carries your weakest corner into the next session as a goal and tells you when you've
 fixed it.
 
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.18)](SimCoach-Setup.exe)**: free, no admin rights needed
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.19)](SimCoach-Setup.exe)**: free, no admin rights needed
 * **[Latest release & full ZIP](../../releases/latest)**
 * **[▶️ Watch the preview video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -66,6 +66,14 @@ The full guide is in [README.txt](README.txt), every release's changes in [CHANG
 library's rules in [references/](references/), developer tools and the release checklist in [tools/](tools/),
 and third-party data credits in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
+### What's new in 6.19
+* **A refined look:** the SimCoach window has been redesigned. Buttons, text boxes, drop-downs, cards,
+  check boxes, sliders and scroll bars are now smooth and rounded; the tabs are clean labels with an
+  underline on the one you're in; the top bar is calmer, with *Start coaching* standing out as the one main
+  action; tables are roomier; and the Live tab lists your lap stats in a tidy column.
+* **Welcome box:** the first-run quick setup opens in the middle of the window and takes the keyboard, so you
+  can type your name straight away.
+
 ### What's new in 6.18
 * **Session goals:** when a session ends, the one or two corners that cost you the most time per clean lap
   become the goal for your next session with that car and track. The coach names the goal in its opening
@@ -76,9 +84,3 @@ and third-party data credits in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
   *Show everything* brings back every tab and setting. Copies updated from an earlier version keep showing
   everything until you click *Simple view*.
 * **A shorter README:** the release history has moved to [CHANGELOG.md](CHANGELOG.md).
-
-### What's new in 6.17
-* **A provider for each AI job:** *Settings → Who does what* sends radio answers, crew banter, setup briefings, the session analysis and command understanding each to OpenAI, Google Gemini or DeepSeek. Use DeepSeek for the frequent, cheap banter and OpenAI for answers, for example. A job whose provider has no key uses the main one, and the fallback still covers outages. Any saved key now switches the AI features on, not only the main provider's.
-* **The coach's analysis in every report:** with an AI key, each Coach Report and after-race text gets a written verdict, what went well, where the time goes and a practice plan, from the session's corners, laps and your earlier sessions. It's added a few seconds after the report is written. After a race the coach also reads out the verdict and the first thing to practise. Switch it off in Settings.
-* **Commands in your own words:** "pipe down for a bit" or "let's practise turn four for three laps" now run the matching radio command. Only harmless commands can be picked this way: resetting your reference or changing the car's setup still needs the exact words.
-* **"Am I improving?"** The radio AI now sees your earlier sessions at the track.

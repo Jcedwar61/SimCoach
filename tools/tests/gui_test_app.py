@@ -64,6 +64,8 @@ def run():
                     yield from walk(c)
             ent = [c for c in walk(tops[0]) if c.winfo_class() == "TEntry"][0]
             ent.insert(0, "Sam")
+            ent.focus_force()            # no window manager under xvfb: give the box the keyboard as a click would
+            pump()
             ent.event_generate("<Return>")
             pump()
             check(cfg["driver_name"] == "Sam" and app.vars["driver_name"].get() == "Sam" and saved.get("name_asked"),
