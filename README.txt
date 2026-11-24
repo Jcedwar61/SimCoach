@@ -153,6 +153,14 @@ On track: live coaching & voice commands
   - Braking countdown: three tones (beep, beep, BEEP) timed to your reference braking point.
   - Race starts: a short reminder when you're sitting on the grid, then a start review after turn one
     (wheelspin, bogging down or lifting, 0-100 km/h time, and places gained or lost). Standing starts only.
+  - Session goals (from one session to the next): when a session ends, the one or two corners that cost
+    you the most time per clean lap (at least 0.08 s on average) are saved as the goal for your next
+    session with that car and track, with what went wrong there. Next time, the opening radio call names
+    the goal ("Today's goal from last session: Turn 5, where you lost 3 tenths a lap"), those corners are
+    your first focus corners, the Live tab shows how each is going against last session, and the coach
+    says "Goal done" once you're at least 0.05 s a lap quicker there over three clean laps. The Coach
+    Report has a "Goal from last session" table and the AI analysis sees it. Ask "what's my goal?". A goal
+    is dropped if your reference lap's corners have changed since.
   - Focus cues & corner-exit feedback: pre-loaded voice cues before your two biggest time-loss corners and
     immediate biomechanical diagnosis on corner exit, followed by a concise end-of-lap debrief.
   - F1 flashbacks & invalid laps: rewinding with a flashback wipes telemetry and off-track markers from the
@@ -165,6 +173,7 @@ On track: live coaching & voice commands
       "how are my tyres", "damage check", "engine temps", "cars around me", "who's ahead", "who's behind"
     * Setup: "suggest a setup", "apply the setup", "show the setup sheet", "close the setup sheet"
     * Briefing: "full briefing", "skip the briefing"
+    * Goal: "what's my goal" (last session's goal corners and how they're going today).
     * Target and consistency: "what's the target time" (a quick lap for your sim and class, and how far off
       you are), "how consistent am I" (how much your clean laps vary, and what to work on first).
     * Practice drills: "work on turn 3 for five laps" (or "practise turn 7"; default 5 laps). The coach talks
@@ -213,9 +222,15 @@ In-game overlay (Overlay button, top right)
 
 Tabs & settings
 ---------------
+  - Simple view: new installs open with just the coaching essentials: the Live, Laps & corners,
+    Settings and Reports tabs, and only the everyday settings. Click "Show everything" (top right) for
+    the Radio check, References, Best laps and Log tabs and every setting (mic input and boost, speech
+    recognition model, AI model and "Who does what", split deltas, library, F1 port, SimHub sharing,
+    phone screen, spotter swap); "Simple view" hides them again. Nothing is switched off while hidden.
+    Copies updated from 6.17 or earlier keep showing everything until you click "Simple view".
   - Live: live delta, lap KPIs (last, best and theoretical best lap, your pace against the target as a
     percentage of a quick lap for your sim and class, and your consistency: how much clean laps vary),
-    latest coach call, current focus corners, Hold to talk, Test voice, Setup sheet button, and Quiet mode
+    latest coach call, current focus corners, today's goal from last session, Hold to talk, Test voice, Setup sheet button, and Quiet mode
     toggle.
   - Quick setup: on first launch SimCoach asks three things: your name, where the coach's voice should
     play (with a test call), and which wheel button you hold to talk. Run it again any time from

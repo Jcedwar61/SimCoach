@@ -30,6 +30,7 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_library_review | GitHub-side checker that adds shared laps (faster / slower / broken / mismatched / non-lap PRs) |
 | test_share_laps | Best laps folder, library fingerprint, GitHub code sign-in, owner commit vs fork + pull request (local stand-in) |
 | test_ac_setup_live | Assetto Corsa setup sheet: runs the in-game helper's real Lua code (needs `pip install lupa`) against a stand-in for CSP: apply, revert, pits rule, missing settings, radio command |
+| test_session_goals | goals carried from one session to the next: chosen corners, opening call, "Goal done", radio answer, report, AI data; Simple view default for new and existing configs |
 | test_pace_consistency | pace against the target, consistency score, advice, voice commands, session history, report |
 | test_raceroom | RaceRoom car names and classes, target times there, moving references saved under "car <id>" |
 | test_benchmarks | benchmark lap times by sim / class / car: selection, starter-lap tuning, target announcements, library file |
@@ -39,13 +40,14 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_session_repeat / test_lap_talk | once-a-day briefing, skip / full briefing; short debriefs, fair coaching |
 | reference library files | every lap in `references/` is valid (`tools/references/check_library.py`) |
 | net_test_update_check | update check, installer download (`--network`) |
-| gui_test_app | Settings, welcome box, setup sheet confirm, overlay SETUP button, phone page, update banner (`--gui`) |
+| gui_test_app | Settings, Simple view, welcome box, setup sheet confirm, overlay SETUP button, phone page, update banner (`--gui`) |
 
 ## Releasing a new version
 
 1. Make the changes and run `tools/run_tests.sh --gui --network`.
 2. `python tools/installer/set_version.py 6.4` sets the version in sim_coach.py and the README download link.
-   Add a "What's new" section to README.md.
+   Add a "What's new" section to README.md (rename "What's new in the next release" to "What's new in 6.4"),
+   and copy it to the top of CHANGELOG.md.
 3. `tools/installer/build_installer.sh` rebuilds the `SimCoach-Setup.exe` wizard with NSIS (`apt install nsis
    p7zip-full`; works from Linux), taking the version from sim_coach.py, and checks every file inside matches
    the repo. `tools/installer/wine_check.sh` runs it under Wine and screenshots every page (`apt install wine
