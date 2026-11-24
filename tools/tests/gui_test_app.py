@@ -283,6 +283,39 @@ def run():
             check(False, "switching the phone screen off stops it")
         except Exception:
             check(True, "switching the phone screen off stops it")
+
+        # Simple view: new installs see the coaching essentials; "Show everything" brings the rest back
+        check(sc.DEFAULT_CONFIG["simple_view"] is True, "new installs start in Simple view")
+        cfg["simple_view"] = True
+        app.nb.select(app.tab_live)
+        app._apply_view()
+        pump()
+        hidden = [a for a in app.ADVANCED_TABS if app.nb.tab(getattr(app, a), "state") == "hidden"]
+        check(len(hidden) == len(app.ADVANCED_TABS), f"Simple view hides the advanced tabs ({hidden})")
+        visible = [app.nb.tab(t, "text") for t in app.nb.tabs() if app.nb.tab(t, "state") != "hidden"]
+        check(visible == ["Live", "Laps & corners", "Settings", "Reports"], f"and keeps the essentials ({visible})")
+        adv = getattr(app, "_adv_widgets", [])
+        check(adv and all(not w.winfo_manager() for _, w, _, _ in adv), f"and the advanced settings ({len(adv)} widgets)")
+        check(app.view_btn.cget("text") == "Show everything", "the top button offers Show everything")
+        app.view_btn.invoke()
+        pump()
+        check(cfg["simple_view"] is False and saved.get("simple_view") is False, "Show everything is saved")
+        check(all(app.nb.tab(getattr(app, a), "state") != "hidden" for a in app.ADVANCED_TABS), "every tab is back")
+        check(all(w.winfo_manager() for _, w, _, _ in adv), "every setting is back")
+        order = [app.nb.tab(t, "text") for t in app.nb.tabs()]
+        check(order[:4] == ["Live", "Radio check", "Laps & corners", "Settings"], f"tabs keep their order ({order})")
+        app.view_btn.invoke()
+        pump()
+        check(cfg["simple_view"] is True and app.nb.tab(app.tab_log, "state") == "hidden", "and Simple view again")
+        app.nb.select(app.tab_ref)
+        pump()
+        check(app.nb.select() == str(app.tab_ref), "a hidden tab can still be opened from code (Share to library)")
+        app._apply_view()
+
+        # the goal carried over from the last session shows on the Live tab
+        app.post(goal="Today's goal  ·  Turn 5: 0.12s a lap quicker so far")
+        pump()
+        check("Turn 5" in app.goal_lbl.cget("text"), "the session goal shows on the Live tab")
     except Exception:
         import traceback
         traceback.print_exc()

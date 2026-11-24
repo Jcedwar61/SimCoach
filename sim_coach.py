@@ -137,6 +137,7 @@ DEFAULT_CONFIG = {
     "github_token": "",
     "github_login": "",
     "github_client_id": "",
+    "simple_view": True,
 }
 RALLY_GAMES = {"EA WRC", "DiRT Rally 2.0", "AC Rally"}
 NO_REFUEL_GAMES = {"F1 25"}
@@ -421,6 +422,8 @@ def load_config():
             d = json.load(fh)
         if isinstance(d, dict):
             cfg.update(d)
+            if d and "simple_view" not in d:
+                cfg["simple_view"] = False      # an existing install keeps every tab it had (switch with the button)
     except Exception:
         pass
     _sane_config(cfg)
@@ -6689,6 +6692,8 @@ class Coach:
         self.ai_analysis = None
         self._ai_analysis_busy = False
         self._debrief_parts = None
+        self.goals = []                  # carried over from the last session here (see carry_goals)
+        self._goals_said = set()
 
     _RE_SAFE_KEY = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -7074,7 +7079,42 @@ class Coach:
         t = self.target()
         return {"date": self.session_start, "best": best_t, "laps": len(times), "theoretical": self.theoretical_best(),
                 "consistency": stdev(ref_t), "consistency_pct": round(cons["pct"], 3) if cons else None,
-                "pace_pct": round(pace, 2) if pace else None, "target": t[0] if t else None}
+                "pace_pct": round(pace, 2) if pace else None, "target": t[0] if t else None,
+                "goals": session_goals(self)}
+
+    def _goal_focus(self, focus):
+        """Put the carried-over goal corners first in the focus list (two corners at most)."""
+        if not self.goals:
+            return focus
+        default = ("Brake on the last beep, then trail in to rotate the nose."
+                   if self.cfg.get("brake_callouts", "focus") != "off" else "Hit your braking marker, then trail in.")
+        gf = [(g["ci"], g.get("tip") or default) for g in self.goals]
+        taken = {ci for ci, _ in gf}
+        return (gf + [x for x in focus if x[0] not in taken])[:2]
+
+    def _goal_line(self):
+        """' Today's goal from last session: Turn 5, ...' for the opening radio call, or ''."""
+        if not self.goals:
+            return ""
+        g = self.goals[0]
+        why = f" Last time: {g['issue'].rstrip('.')}." if g.get("issue") else ""
+        more = f" Then {self.turn(self.goals[1]['ci'])}." if len(self.goals) > 1 else ""
+        return (f" Today's goal from last session: {self.turn(g['ci'])}, where you lost {tenths(g['loss'])} a lap."
+                f"{why}{more}")
+
+    def _goal_check(self, announce=True):
+        """After a clean lap: the goal line for the Live tab, plus a one-off radio line when a goal is met
+        (held back while `announce` is False, e.g. during a drill or on an excused lap)."""
+        if not self.goals:
+            return None
+        self.overlay.post(goal=goal_text(self))
+        if not announce:
+            return None
+        for p in goal_progress(self):
+            if p["done"] and p["ci"] not in self._goals_said:
+                self._goals_said.add(p["ci"])
+                return (f"Goal done: {self.turn(p['ci'])} is {tenths(p['change'])} a lap quicker than last session.")
+        return None
 
     def snapshot_report(self):
         """Write a Coach Report for the laps so far without closing the session (no duplicate progress rows)."""
@@ -7151,6 +7191,10 @@ class Coach:
                               **({"pit": True} if h.get("pit") else {}), **({"off_track": True} if h.get("invalid") else {})}
                              for i, h in enumerate(self.history[-60:])]
             d["session_started"] = self.session_start
+            d["goals_from_last_session"] = [
+                {"turn": g["ci"] + 1, "lost_per_lap_last_session_s": g["loss"], "issue": g.get("issue") or g.get("tip"),
+                 "change_this_session_s": None if g["change"] is None else round(g["change"], 3), "clean_laps": g["n"],
+                 "done": g["done"]} for g in goal_progress(self)]
         d["previous_sessions"] = [{k: x.get(k) for k in ("date", "best", "laps", "pace_pct", "consistency")}
                                   for x in (sessions or [])[-8:]]
         return d
@@ -7605,12 +7649,15 @@ class Coach:
             self.last_frame = f
             self.track_len = f.track_len
             name = self.cfg.get("driver_name") or "driver"
+            self.overlay.post(goal="")
             if self.load():
                 past = self.past_sessions()
                 extra = f" Last session you did {fmt_time(past[-1]['best'])}." if past else ""
-                self._set_focus(self.starter_focus())
+                self.goals = carry_goals(past, self.corners)
+                self._set_focus(self._goal_focus(self.starter_focus()))
+                self.overlay.post(goal=goal_text(self))
                 self.say(f"Radio check, {name}. {f.track}, your best here is {fmt_time(self.best_time)}.{extra} "
-                         f"{len(self.corners)} corners mapped, coaching is live.", now, force=True)
+                         f"{len(self.corners)} corners mapped, coaching is live.{self._goal_line()}", now, force=True)
             elif not self._try_starter(f, now, name):
                 target = ""
                 bt = benchmark_track(f.game, f.track, f.track_len) if self.cfg.get("starter_laps", True) else None
@@ -8590,6 +8637,7 @@ class Coach:
             parts.append(f"{tenths(delta)} off your best.")
         if improved and (pb or delta <= 0.6) and not drill_msg and chatty:
             parts.append(f"Gained most in {self.turn(max(improved)[1])}.")
+        goal_msg = self._goal_check(announce=not (will_finish_race or drill_msg or excuse))
         if will_finish_race:
             self.say(" ".join(parts), now, force=True)
             self._set_focus(self.focus)
@@ -8597,6 +8645,8 @@ class Coach:
         # one coaching point
         if drill_msg:
             parts.append(drill_msg)
+        elif goal_msg:
+            parts.append(goal_msg)
         elif self.focus and not excuse:
             ci, tip = self.focus[0]
             parts.append(f"Next lap, isolate {self.turn(ci)}: {tip}")
@@ -10402,6 +10452,105 @@ def corner_rows(coach):
     return rows
 
 
+# --- session goals: the corners that cost the most time become the next session's goal ------------------------
+GOAL_MIN_LOSS = 0.08     # a corner must cost this much per lap on average to become a goal
+GOAL_DONE = 0.05         # ...and be this much quicker on average next session to count as done
+GOAL_DONE_LAPS = 3       # clean laps through it needed before calling a goal done
+GOAL_APEX_TOL = int(0.02 * BINS)   # the saved corner must still be the same corner (apex within 2 % of a lap)
+
+
+def _clean_segs(history, ci):
+    """Corner ci's times on the clean laps (no pit, not off track) in `history`."""
+    out = []
+    for h in history:
+        if h.get("pit") or h.get("invalid"):
+            continue
+        m = (h.get("corners") or {}).get(ci)
+        if m is not None and ok(m.get("seg")):
+            out.append(m["seg"])
+    return out
+
+
+def session_goals(coach, n=2):
+    """Next session's goals: the corners that cost the most time per clean lap this session. Each is
+    {"ci", "apex", "avg" (average time through the corner, s), "loss" (that vs the best corner, s), "issue" (the most
+    common diagnosis), "tip" (a short cue), "laps"}. Saved in the session history; carry_goals() picks them up."""
+    out = []
+    for ci, c in enumerate(coach.corners):
+        best = coach.best_corner.get(ci) or {}
+        if not ok(best.get("seg")):
+            continue
+        segs = _clean_segs(coach.history, ci)
+        if len(segs) < 3:
+            continue
+        avg = sum(segs) / len(segs)
+        loss = avg - best["seg"]
+        if loss < GOAL_MIN_LOSS:
+            continue
+        issues = coach.issue_counts.get(ci) or {}
+        issue = max(issues.items(), key=lambda kv: kv[1])[0] if issues else ""
+        tip = ""
+        for h in reversed(coach.history):
+            m = (h.get("corners") or {}).get(ci)
+            if not h.get("pit") and not h.get("invalid") and m is not None and ok(m.get("seg")):
+                try:
+                    tip = coach.diagnose(m, best, cue=True) or ""
+                except Exception:
+                    tip = ""
+                break
+        out.append({"ci": ci, "apex": int(c[1]), "avg": round(avg, 3), "loss": round(loss, 3), "issue": issue,
+                    "tip": tip, "laps": len(segs)})
+    out.sort(key=lambda g: -g["loss"])
+    return out[:n]
+
+
+def carry_goals(sessions, corners):
+    """The goals set by the most recent earlier session that recorded any, kept only where that corner is still the
+    same corner (the reference may have been replaced since)."""
+    for s in reversed(sessions or []):
+        gs = s.get("goals") if isinstance(s, dict) else None
+        if not isinstance(gs, list):
+            continue                      # an older session, saved before goals existed
+        kept = []
+        for g in gs:
+            try:
+                ci, apex, avg = int(g["ci"]), int(g["apex"]), float(g["avg"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 0 <= ci < len(corners) and abs(int(corners[ci][1]) - apex) <= GOAL_APEX_TOL and avg > 0:
+                kept.append(dict(g, ci=ci, apex=apex, avg=avg, date=s.get("date")))
+        return kept
+    return []
+
+
+def goal_progress(coach):
+    """Each goal with how this session compares: "now" (average corner time), "n" (clean laps), "change" (now minus
+    last session's average, negative = quicker) and "done"."""
+    rows = []
+    for g in getattr(coach, "goals", None) or []:
+        segs = _clean_segs(coach.history, g["ci"])
+        now = sum(segs) / len(segs) if segs else None
+        change = None if now is None else now - g["avg"]
+        rows.append(dict(g, now=now, n=len(segs), change=change,
+                         done=change is not None and len(segs) >= GOAL_DONE_LAPS and change <= -GOAL_DONE))
+    return rows
+
+
+def goal_text(coach):
+    """One line for the Live tab: each goal and how it's going."""
+    parts = []
+    for p in goal_progress(coach):
+        turn = f"Turn {p['ci'] + 1}"
+        if p["n"] >= 2 and p["change"] is not None:
+            how = (f"{-p['change']:.2f}s a lap quicker than last session ✓" if p["done"] else
+                   f"{-p['change']:.2f}s a lap quicker so far" if p["change"] < 0 else
+                   f"{p['change']:.2f}s a lap slower than last session")
+        else:
+            how = f"lost {p['loss']:.2f}s a lap there last session"
+        parts.append(f"{turn}: {how}")
+    return ("Today's goal  ·  " + "   ·   ".join(parts)) if parts else ""
+
+
 def write_report(coach, sessions, existing_path=None):
     import html
 
@@ -10447,6 +10596,15 @@ def write_report(coach, sessions, existing_path=None):
 
     def _sgn(x):
         return "—" if x is None else f"{x:+.2f}s"
+    def _goal_row(g):
+        fix = html.escape((g.get("issue") or g.get("tip") or "—").replace("k p h", "km/h"))
+        chg = "—" if g["change"] is None else f"{g['change']:+.2f}s" + (" ✓ done" if g["done"] else "")
+        return (f"<tr><td>Turn {g['ci'] + 1}</td><td>{g['loss']:.2f}s a lap</td><td>{fix}</td><td>{chg}</td>"
+                f"<td>{g['n']}</td></tr>")
+    goals = goal_progress(coach)
+    goals_html = ("<h2>Goal from last session</h2><div class=\"wrap\"><table><tr><th>Corner</th><th>Lost last session</th>"
+                  "<th>What to fix</th><th>This session vs last</th><th>Clean laps</th></tr>"
+                  + "".join(_goal_row(g) for g in goals) + "</table></div>") if goals else ""
     drills = getattr(coach, "drills_done", None) or []
     drills_html = ("<h2>Practice drills</h2><div class=\"wrap\"><table><tr><th>Corner</th><th>Clean laps</th>"
                    "<th>Avg vs your best, before</th><th>Avg vs your best, during</th><th>Best effort</th></tr>"
@@ -10473,7 +10631,7 @@ svg{{width:100%;height:auto;border:1px solid var(--line);border-radius:10px}} .b
 <div class="k"><span>Theoretical best</span><b>{fmt_time(tb).replace(' ', ':') if tb else '—'}</b></div>
 <div class="k"><span>Laps</span><b>{len(times)}</b></div>
 {pace_kpi}<div class="k"><span>Consistency{cons_note}</span><b>{f"±{cons['sd']:.2f}s" if cons else f"{stdev(ref_times):.2f}s"}</b></div></div>{verdict}
-<p><strong>Next focus:</strong> {focus}.</p>{analysis_html(getattr(coach, "ai_analysis", None))}{setup_sheet_html(sheet_with_measured_fuel(getattr(coach, "last_setup_sheet", None), measured_fpl, game))}{f'<p><strong>Pre-race setup (Strategist &amp; Coach):</strong> {html.escape(coach.last_setup_briefing["strategist"].replace("k p h", "km/h"))} {html.escape(coach.last_setup_briefing["coach"].replace("k p h", "km/h"))}</p>' if getattr(coach, "last_setup_briefing", None) else ''}
+{goals_html}<p><strong>Next focus:</strong> {focus}.</p>{analysis_html(getattr(coach, "ai_analysis", None))}{setup_sheet_html(sheet_with_measured_fuel(getattr(coach, "last_setup_sheet", None), measured_fpl, game))}{f'<p><strong>Pre-race setup (Strategist &amp; Coach):</strong> {html.escape(coach.last_setup_briefing["strategist"].replace("k p h", "km/h"))} {html.escape(coach.last_setup_briefing["coach"].replace("k p h", "km/h"))}</p>' if getattr(coach, "last_setup_briefing", None) else ''}
 {drills_html}<h2>Speed trace</h2><div class="legend"><span><i style="background:var(--acc)"></i>Best lap</span><span><i style="background:var(--acc2)"></i>Last lap</span></div>{svg}
 <h2>Turn by turn</h2><div class="wrap"><table><tr><th>Corner</th><th>Avg loss vs your best</th><th>Variation</th><th>Best min speed (km/h)</th><th>Lock-ups</th><th>Wheelspin</th><th>Most common issue</th></tr>{trows}</table></div>
 <h2>Laps</h2><div class="wrap"><table><tr><th>Lap</th><th>Time</th><th>Gap to best</th></tr>{lrows}</table></div>
@@ -11794,6 +11952,7 @@ class Conversation:
     _RE_THEO = re.compile(r"\b(theoretical|optimal|ultimate) (best|lap)\b")
     _RE_TARGET = re.compile(r"\b(target( lap| time)?|off the pace|how far off|pace percent(age)?|benchmark)\b")
     _RE_CONSISTENCY = re.compile(r"\b(consisten\w*|how (steady|repeatable))\b")
+    _RE_GOAL = re.compile(r"\b((my|today'?s|the|session) goals?|goals? (for )?today|homework)\b")
     _RE_PACE = re.compile(r"\b(what('s| is) my pace|how('s| is) (my|the) pace|my average( lap)?|average lap( time)?)\b")
     _RE_FUEL_NEED = re.compile(r"\b(how much fuel (do (i|we) need|to add|should (i|we) add|to (the )?(end|finish|flag))|"
                                r"fuel (to add|to (the )?(end|finish|flag)|needed))\b")
@@ -11921,6 +12080,23 @@ class Conversation:
         if self._RE_THEO.search(t):
             tb = c.theoretical_best()
             return f"Putting your best corners together gives {fmt_time(tb)}." if tb else "Need a few laps first."
+        if self._RE_GOAL.search(t):
+            prog = goal_progress(c)
+            if not prog:
+                return ("No goal carried over: last session here didn't leave a corner costing much time. "
+                        "I'll set one when this session ends.")
+            lines = []
+            for p in prog:
+                if p["done"]:
+                    how = f"done, {tenths(p['change'])} a lap quicker than last session"
+                elif p["n"] >= 2 and p["change"] is not None:
+                    how = (f"{tenths(p['change'])} a lap quicker so far" if p["change"] < 0 else
+                           f"not there yet, {tenths(p['change'])} a lap slower than last session")
+                else:
+                    how = f"you lost {tenths(p['loss'])} a lap there last session" + (
+                        f". {p['tip'].rstrip('.')}" if p.get("tip") else "")
+                lines.append(f"{c.turn(p['ci'])}: {how}.")
+            return "Today's goal. " + " ".join(lines)
         if self._RE_TARGET.search(t):
             tg = c.target()
             if not tg:
@@ -14222,6 +14398,8 @@ class App:
         self.start_btn.pack(side="right")
         ttk.Button(top, text="Overlay", command=self.toggle_overlay).pack(side="right", padx=8)
         ttk.Button(top, text="Phone screen", command=self.phone_screen_dialog).pack(side="right")
+        self.view_btn = ttk.Button(top, text="Show everything", command=self.toggle_view)
+        self.view_btn.pack(side="right", padx=8)
         self.ov_lock_btn = ttk.Button(top, text="Unlock overlay" if self.cfg.get("overlay_locked") else "Lock overlay",
                                       command=self.toggle_overlay_lock)
         self.ov_lock_btn.pack(side="right")
@@ -14244,6 +14422,56 @@ class App:
         self._reports()
         self._log()
         nb.bind("<<NotebookTabChanged>>", self._tab_changed)
+        self._apply_view()
+
+    # --- Simple view: the coaching essentials up front, everything else one click away ---------------------------
+    ADVANCED_TABS = ("tab_radio", "tab_ref", "tab_best", "tab_log")
+
+    def _adv(self, *widgets):
+        """Register settings widgets that only show with 'Show everything' (they must already be placed)."""
+        reg = self.__dict__.setdefault("_adv_widgets", [])
+        for w in widgets:
+            if w is None:
+                continue
+            if w.winfo_manager() == "grid":
+                reg.append(("grid", w, None, None))
+            else:
+                sl = w.master.pack_slaves()
+                i = sl.index(w)
+                info = {k: v for k, v in w.pack_info().items() if k != "in"}
+                reg.append(("pack", w, sl[i - 1] if i else None, info))
+
+    def _apply_view(self):
+        simple = bool(self.cfg.get("simple_view"))
+        for attr in self.ADVANCED_TABS:
+            tab = getattr(self, attr, None)
+            if tab is None:
+                continue
+            if simple:
+                self.nb.hide(tab)
+            else:
+                self.nb.add(tab)
+        for kind, w, prev, info in getattr(self, "_adv_widgets", ()):
+            if kind == "grid":
+                w.grid_remove() if simple else w.grid()
+            elif simple:
+                w.pack_forget()
+            elif prev is not None:
+                w.pack(after=prev, **info)
+            else:
+                w.pack(**info)
+        self.view_btn.configure(text="Show everything" if simple else "Simple view")
+        note = getattr(self, "adv_note", None)
+        if note is not None:
+            note.configure(text="More settings: click Show everything (top right)." if simple else "")
+
+    def toggle_view(self):
+        self.cfg["simple_view"] = not bool(self.cfg.get("simple_view"))
+        save_config(self.cfg)
+        self._apply_view()
+        self.log("Simple view: the essentials only. 'Show everything' brings back every tab and setting."
+                 if self.cfg["simple_view"] else
+                 "Showing everything: Radio check, References, Best laps, Log and every setting.")
 
     def _tab_changed(self, _e=None):
         tab = self.nb.select()
@@ -14289,6 +14517,9 @@ class App:
         self.focus_lbl = tk.Label(tcard, text="", bg=C["panel"], fg=C["teal"], font=self._font(11), wraplength=1040,
                                   justify="left", anchor="w")
         self.focus_lbl.pack(fill="x", anchor="w", pady=(6, 0))
+        self.goal_lbl = tk.Label(tcard, text="", bg=C["panel"], fg=C["good"], font=self._font(11), wraplength=1040,
+                                 justify="left", anchor="w")
+        self.goal_lbl.pack(fill="x", anchor="w", pady=(4, 0))
         self.heard_lbl = tk.Label(tcard, text="", bg=C["panel"], fg=C["violet"], font=self._font(10), anchor="w")
         self.heard_lbl.pack(fill="x", anchor="w", pady=(6, 0))
 
@@ -14303,7 +14534,7 @@ class App:
         self.mute_var = tk.BooleanVar(value=self.cfg.get("talk_level", 1) == 0)
         ttk.Checkbutton(ctl, text="Quiet mode (answers only)", variable=self.mute_var,
                         command=self._mute_changed).pack(side="left", padx=8)
-        self.mic_lbl = ttk.Label(ctl, text="Mic opens with coaching or the Radio check tab", style="Mut.TLabel")
+        self.mic_lbl = ttk.Label(ctl, text="Mic opens when coaching starts (or on the Radio check tab)", style="Mut.TLabel")
         self.mic_lbl.pack(side="right")
 
     RC_STEPS = [("ptt", "Push-to-talk"), ("mic", "Microphone"), ("stt", "Speech recognition"),
@@ -14492,11 +14723,16 @@ class App:
             g.pack(fill="x")
             return g
 
-        def row(g, r, label, widget, hint=""):
-            ttk.Label(g, text=label, style="Card.TLabel", width=17).grid(row=r, column=0, sticky="w", pady=5)
+        def row(g, r, label, widget, hint="", adv=False):
+            lab = ttk.Label(g, text=label, style="Card.TLabel", width=17)
+            lab.grid(row=r, column=0, sticky="w", pady=5)
             widget.grid(row=r, column=1, sticky="w", pady=5)
+            h = None
             if hint:
-                ttk.Label(g, text=hint, style="Mut.TLabel").grid(row=r, column=2, sticky="w", padx=8)
+                h = ttk.Label(g, text=hint, style="Mut.TLabel")
+                h.grid(row=r, column=2, sticky="w", padx=8)
+            if adv:
+                self._adv(lab, widget, h)
 
         a = self._card(left, fill="x", pady=(0, 8))
         ttk.Label(a, text="Voice & audio", style="Sec.TLabel").pack(anchor="w", pady=(0, 6))
@@ -14520,14 +14756,14 @@ class App:
         row(g, 5, "Microphone", self.mic_combo)
         self.vars["mic_api"] = tk.StringVar(value=_LABEL_BY_MIC_API.get(self.cfg.get("mic_api"), _MIC_API_LABELS[0]))
         row(g, 6, "Mic input", ttk.Combobox(g, textvariable=self.vars["mic_api"], values=_MIC_API_LABELS,
-                                            state="readonly", width=28), "WASAPI is the clearest")
+                                            state="readonly", width=28), "WASAPI is the clearest", adv=True)
         self.vars["mic_gain"] = tk.DoubleVar(value=float(self.cfg.get("mic_gain", 1.0)))
         row(g, 7, "Mic boost", ttk.Scale(g, from_=0.5, to=3.0, variable=self.vars["mic_gain"], length=200),
-            "quiet headset: raise it")
+            "quiet headset: raise it", adv=True)
         mnames = _WHISPER_NAMES
         self.vars["whisper_model"] = tk.StringVar(value=_LABEL_BY_WHISPER.get(self.cfg.get("whisper_model"), mnames[0]))
         row(g, 8, "Speech recognition", ttk.Combobox(g, textvariable=self.vars["whisper_model"], values=mnames,
-                                                     state="readonly", width=28))
+                                                     state="readonly", width=28), adv=True)
         b = ttk.Frame(a, style="Card.TFrame")
         b.pack(fill="x", pady=(8, 0))
         ttk.Button(b, text="Test voice & tones", command=self.test_voice).pack(side="left")
@@ -14553,7 +14789,7 @@ class App:
             self.vars[f"{pid}_model"] = tk.StringVar(value=ai_model(self.cfg, pid))
         self.key_entry = self.key_entries["openai"]
         self.model_combo = ttk.Combobox(cg_ai, width=28)
-        row(cg_ai, len(AI_PROVIDERS) + 1, "Model", self.model_combo)
+        row(cg_ai, len(AI_PROVIDERS) + 1, "Model", self.model_combo, adv=True)
 
         def on_provider(_e=None):
             pid = _AI_BY_LABEL.get(self.vars["ai_provider"].get(), "openai")
@@ -14563,17 +14799,22 @@ class App:
                 self.key_lbl.configure(text="")
         prov_combo.bind("<<ComboboxSelected>>", on_provider)
         self.vars["ai_fallback"] = tk.BooleanVar(value=bool(self.cfg.get("ai_fallback", True)))
-        ttk.Checkbutton(cv, text="If the provider is down or busy, try my other keys", variable=self.vars["ai_fallback"]
-                        ).pack(anchor="w", pady=(6, 0))
+        w_ = ttk.Checkbutton(cv, text="If the provider is down or busy, try my other keys",
+                             variable=self.vars["ai_fallback"])
+        w_.pack(anchor="w", pady=(6, 0))
+        self._adv(w_)
         self.vars["ai_reports"] = tk.BooleanVar(value=bool(self.cfg.get("ai_reports", True)))
         ttk.Checkbutton(cv, text="Write a coach's analysis and practice plan into each report",
                         variable=self.vars["ai_reports"]).pack(anchor="w", pady=(2, 0))
         self.vars["ai_commands"] = tk.BooleanVar(value=bool(self.cfg.get("ai_commands", True)))
-        ttk.Checkbutton(cv, text="Understand commands however I word them",
-                        variable=self.vars["ai_commands"]).pack(anchor="w", pady=(2, 0))
-        ttk.Label(cv, text="Who does what (e.g. DeepSeek for banter, OpenAI for answers)", style="Mut.TLabel"
-                  ).pack(anchor="w", pady=(8, 2))
+        w_ = ttk.Checkbutton(cv, text="Understand commands however I word them", variable=self.vars["ai_commands"])
+        w_.pack(anchor="w", pady=(2, 0))
+        self._adv(w_)
+        w_ = ttk.Label(cv, text="Who does what (e.g. DeepSeek for banter, OpenAI for answers)", style="Mut.TLabel")
+        w_.pack(anchor="w", pady=(8, 2))
+        self._adv(w_)
         cg_task = grid_rows(cv)
+        self._adv(cg_task)
         task_tasks = self.cfg.get("ai_tasks") or {}
         for i, (tid, tlabel) in enumerate(AI_TASKS.items()):
             self.vars[f"ai_task_{tid}"] = tk.StringVar(value=AI_PROVIDERS[task_tasks[tid]]["label"]
@@ -14625,8 +14866,10 @@ class App:
             ttk.Radiobutton(bc, text=txt, value=val, variable=self.vars["brake_callouts"]).pack(side="left", padx=(0, 10))
         row(cg, 2, "Braking tones", bc)
         self.vars["split_callouts"] = tk.BooleanVar(value=bool(self.cfg.get("split_callouts")))
-        ttk.Checkbutton(c, text="Split deltas: say the gap to your best at 1/3 and 2/3 of the lap",
-                        variable=self.vars["split_callouts"]).pack(anchor="w", pady=2)
+        w_ = ttk.Checkbutton(c, text="Split deltas: say the gap to your best at 1/3 and 2/3 of the lap",
+                             variable=self.vars["split_callouts"])
+        w_.pack(anchor="w", pady=2)
+        self._adv(w_)
         self.vars["auto_start"] = tk.BooleanVar(value=bool(self.cfg.get("auto_start")))
         ttk.Checkbutton(c, text="Start coaching automatically when SimCoach opens",
                         variable=self.vars["auto_start"]).pack(anchor="w", pady=2)
@@ -14634,22 +14877,30 @@ class App:
         ttk.Checkbutton(c, text="Starter laps: coach from lap one at known tracks",
                         variable=self.vars["starter_laps"]).pack(anchor="w", pady=2)
         self.vars["shared_refs"] = tk.BooleanVar(value=bool(self.cfg.get("shared_refs", True)))
-        ttk.Checkbutton(c, text="Use and auto-import reference laps from the SimCoach library",
-                        variable=self.vars["shared_refs"]).pack(anchor="w", pady=2)
+        w_ = ttk.Checkbutton(c, text="Use and auto-import reference laps from the SimCoach library",
+                             variable=self.vars["shared_refs"])
+        w_.pack(anchor="w", pady=2)
+        self._adv(w_)
         pf = ttk.Frame(c, style="Card.TFrame")
         pf.pack(anchor="w", pady=(6, 0))
+        self._adv(pf)
         ttk.Label(pf, text="F1 25 UDP port", style="Card.TLabel").pack(side="left")
         self.vars["f1_port"] = tk.StringVar(value=str(self.cfg.get("f1_port", 20777)))
         ttk.Entry(pf, textvariable=self.vars["f1_port"], width=8).pack(side="left", padx=8)
         ttk.Label(pf, text="also listens on 20778 (SimHub)", style="Mut.TLabel").pack(side="left")
         self.vars["udp_share_simhub"] = tk.BooleanVar(value=bool(self.cfg.get("udp_share_simhub", True)))
-        ttk.Checkbutton(c, text="Share F1 25 / DiRT Rally 2.0 telemetry with SimHub",
-                        variable=self.vars["udp_share_simhub"]).pack(anchor="w", pady=(4, 0))
+        w_ = ttk.Checkbutton(c, text="Share F1 25 / DiRT Rally 2.0 telemetry with SimHub",
+                             variable=self.vars["udp_share_simhub"])
+        w_.pack(anchor="w", pady=(4, 0))
+        self._adv(w_)
         self.vars["second_screen"] = tk.BooleanVar(value=bool(self.cfg.get("second_screen")))
-        ttk.Checkbutton(c, text="Phone / tablet live screen (see the Phone screen button up top)",
-                        variable=self.vars["second_screen"]).pack(anchor="w", pady=(4, 0))
+        w_ = ttk.Checkbutton(c, text="Phone / tablet live screen (see the Phone screen button up top)",
+                             variable=self.vars["second_screen"])
+        w_.pack(anchor="w", pady=(4, 0))
+        self._adv(w_)
         self.screen_lbl = ttk.Label(c, text="", style="Mut.TLabel")
         self.screen_lbl.pack(anchor="w")
+        self._adv(self.screen_lbl)
         uf = ttk.Frame(c, style="Card.TFrame")
         uf.pack(anchor="w", pady=(4, 0), fill="x")
         self.vars["check_updates"] = tk.BooleanVar(value=bool(self.cfg.get("check_updates", True)))
@@ -14685,9 +14936,12 @@ class App:
         self.vars["sheet_autopop"] = tk.BooleanVar(value=bool(self.cfg.get("sheet_autopop", True)))
         ttk.Checkbutton(rc, text="Open the setup sheet at the start of each session",
                         variable=self.vars["sheet_autopop"]).pack(anchor="w", pady=(6, 0))
-        ttk.Label(rc, text="Spotter calls the wrong side? Swap left/right in:", style="Card.TLabel").pack(anchor="w", pady=(8, 0))
+        w_ = ttk.Label(rc, text="Spotter calls the wrong side? Swap left/right in:", style="Card.TLabel")
+        w_.pack(anchor="w", pady=(8, 0))
+        self._adv(w_)
         sw = ttk.Frame(rc, style="Card.TFrame")
         sw.pack(anchor="w", pady=(2, 0))
+        self._adv(sw)
         swapped = self.cfg.get("spotter_swap") or []
         for game in SPOTTER_GAMES:
             self.vars[f"swap_{game}"] = tk.BooleanVar(value=swapped is True or game in swapped)
@@ -14704,6 +14958,8 @@ class App:
         self.saved_lbl.pack(side="left", padx=12)
         ttk.Button(foot, text="Open log file", command=lambda: self._open(LOG_PATH)).pack(side="right")
         ttk.Button(foot, text="Create desktop shortcut", command=self.make_shortcut).pack(side="right", padx=8)
+        self.adv_note = ttk.Label(foot, text="More settings: Show everything (top right)", style="Mut.TLabel")
+        self.adv_note.pack(side="left", padx=12)
         ttk.Button(foot, text="Quick setup", command=self._ask_name).pack(side="right")
         self.root.after(300, self.refresh_devices)
 
@@ -16363,6 +16619,8 @@ class App:
                 self._ov_set_text(tip=tip)
             if "focus" in merged:
                 self.focus_lbl.configure(text=self._pretty(merged["focus"]))
+            if "goal" in merged:
+                self.goal_lbl.configure(text=self._pretty(merged["goal"]))
             if "heard" in merged:
                 self.heard_lbl.configure(text=merged["heard"])
             if "head" in merged:
