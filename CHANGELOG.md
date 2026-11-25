@@ -2,6 +2,12 @@
 
 Every release, newest first. The README has the latest one.
 
+## What's new in 6.21
+* **Closes cleanly:** quitting SimCoach no longer trips a wheel-button error ("video system not initialized")
+  and briefly restarts the controller scan while it shuts down; the button reader now stops first.
+* **One radio check at a time:** clicking *Test voice* repeatedly no longer queues the same radio check (and
+  its tones) several times over.
+
 ## What's new in 6.20
 * **Fixes the slow window in 6.19:** switching tabs, scrolling and resizing had become very slow (seconds per
   tab on some PCs) because of how 6.19 drew its new rounded controls. They're prepared once at start-up now, so
