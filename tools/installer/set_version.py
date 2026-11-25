@@ -28,7 +28,7 @@ def sub(path, pattern, repl):
 def main(v):
     if not re.fullmatch(r"\d+(\.\d+){0,3}", v):
         sys.exit("version looks like 6.4 or 6.4.1")
-    sub("sim_coach.py", r'^APP_VERSION = "[^"]*"$', f'APP_VERSION = "{v}"')
+    sub("sim_coach.py", r'^APP_VERSION = "[^"]*"(?=\r?$)', f'APP_VERSION = "{v}"')
     sub("README.md", r"\(Windows Installer, v[0-9.]+\)", f"(Windows Installer, v{v})")
     print("Now add a \"What's new\" section to README.md and run tools/installer/build_installer.sh")
 

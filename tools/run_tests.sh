@@ -5,6 +5,7 @@
 #   tools/run_tests.sh --network   + the update check against GitHub
 # PYTHON=... picks the interpreter (needs numpy and openai; the window tests need tkinter).
 set -uo pipefail
+export PYTHONIOENCODING=utf-8  # Windows consoles default to cp1252, which can't print the tests' "✓"
 HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 PY="${PYTHON:-python3}"; GUI=0; NET=0
 for a in "$@"; do case "$a" in --gui) GUI=1;; --network) NET=1;; esac; done

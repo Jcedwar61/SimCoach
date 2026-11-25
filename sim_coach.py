@@ -69,7 +69,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.20"
+APP_VERSION = "6.21"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -4161,8 +4161,13 @@ class Controls:
         except Exception as e:
             self.log(f"Wheel buttons unavailable: {e}")
             return
+        # pygame registers pygame.quit() with atexit on import; atexit runs handlers last-in-first-out,
+        # so this runs first and stops the loop before SDL is torn down under it. Without it the poll hit
+        # "video system not initialized" at every app exit and re-initialised SDL mid-shutdown.
+        self._exiting = threading.Event()
+        atexit.register(self._exiting.set)
         prev, base, last_scan = {}, None, time.monotonic()
-        while True:
+        while not self._exiting.is_set():
             try:
                 pygame.event.pump()
                 now = time.monotonic()
@@ -4211,6 +4216,8 @@ class Controls:
                     prev[action] = down
                 self.held = held
             except Exception as e:
+                if self._exiting.is_set() or not pygame.get_init():
+                    return  # app is shutting down: don't log or bring SDL back up
                 if not getattr(self, "_poll_err_said", False):
                     self._poll_err_said = True
                     self.log(f"Wheel button polling error: {e} (recovering)")
@@ -16264,9 +16271,15 @@ class App:
         self.dot.itemconfigure(self.dot_id, fill=color)
 
     def test_voice(self):
+        # One radio check at a time: repeated clicks while the first is still being synthesised used to
+        # queue the line (and its tones) several times over.
+        now = time.monotonic()
+        if now < getattr(self, "_test_voice_until", 0.0):
+            return
+        self._test_voice_until = now + 4.5
         self.save_settings(quiet=True)
         name = self.cfg.get("driver_name") or "driver"
-        self.voice.say(f"Radio check, {name}. Loud and clear.", time.monotonic(), "urgent")
+        self.voice.say(f"Radio check, {name}. Loud and clear.", now, "urgent")
 
         def tones():
             time.sleep(2.6)

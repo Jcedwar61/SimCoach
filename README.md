@@ -7,7 +7,7 @@ corners that matter, a diagnosis as you exit them, one thing to work on after ea
 when you stop. Then it carries your weakest corner into the next session as a goal and tells you when you've
 fixed it.
 
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.20)](SimCoach-Setup.exe)**: free, no admin rights needed
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.21)](SimCoach-Setup.exe)**: free, no admin rights needed
 * **[Latest release & full ZIP](../../releases/latest)**
 * **[▶️ Watch the preview video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -65,6 +65,12 @@ with SimHub.
 The full guide is in [README.txt](README.txt), every release's changes in [CHANGELOG.md](CHANGELOG.md), the
 library's rules in [references/](references/), developer tools and the release checklist in [tools/](tools/),
 and third-party data credits in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.21
+* **Closes cleanly:** quitting SimCoach no longer trips a wheel-button error ("video system not initialized")
+  and briefly restarts the controller scan while it shuts down; the button reader now stops first.
+* **One radio check at a time:** clicking *Test voice* repeatedly no longer queues the same radio check (and
+  its tones) several times over.
 
 ### What's new in 6.20
 * **Fixes the slow window in 6.19:** switching tabs, scrolling and resizing had become very slow (seconds per
