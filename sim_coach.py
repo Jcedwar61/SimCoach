@@ -69,7 +69,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.22"
+APP_VERSION = "6.23"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -416,17 +416,105 @@ def _sane_config(cfg):
     cfg["second_screen_port"] = int(sp) if _sane_num(sp) and 1024 <= int(sp) <= 65535 else 8765
 
 
+SECRET_KEYS = ("openai_api_key", "gemini_api_key", "deepseek_api_key", "github_token")
+_DPAPI_TAG = "dpapi:"
+
+
+def _dpapi(data: bytes, protect: bool) -> bytes:
+    """Windows' per-user encryption (DPAPI): only this Windows account on this PC can decrypt what it encrypted."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Blob(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+    crypt32, kernel32 = ctypes.windll.crypt32, ctypes.windll.kernel32
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    buf = ctypes.create_string_buffer(data, len(data))
+    blob_in, blob_out = Blob(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))), Blob()
+    fn = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
+    if not fn(ctypes.byref(blob_in), None, None, None, None, 0x1, ctypes.byref(blob_out)):  # 0x1: no UI
+        raise OSError(f"DPAPI failed ({ctypes.GetLastError()})")
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        kernel32.LocalFree(ctypes.cast(blob_out.pbData, ctypes.c_void_p))
+
+
+def seal_secret(value):
+    """How an API key / sign-in token is written to config.json: DPAPI-encrypted on Windows, as is elsewhere."""
+    if not value or sys.platform != "win32" or str(value).startswith(_DPAPI_TAG):
+        return value
+    try:
+        import base64
+        return _DPAPI_TAG + base64.b64encode(_dpapi(str(value).encode("utf-8"), True)).decode("ascii")
+    except Exception as e:
+        file_log(f"Couldn't encrypt a key for config.json ({e}); it is saved unencrypted")
+        return value
+
+
+def open_secret(value):
+    """The key itself, from what config.json holds (encrypted or, from older versions, plain). A key encrypted by
+    another Windows account or PC can't be read: it comes back empty, to be entered again."""
+    if not (isinstance(value, str) and value.startswith(_DPAPI_TAG)):
+        return value
+    try:
+        import base64
+        return _dpapi(base64.b64decode(value[len(_DPAPI_TAG):]), False).decode("utf-8")
+    except Exception as e:
+        file_log(f"Couldn't decrypt a saved key ({e}); enter it again in Settings")
+        return ""
+
+
+def set_aside(path, why, log=None):
+    """A file of the driver's that can't be read: keep it as <name>.corrupt-<time> rather than let the next save
+    overwrite it, so whatever it holds can still be recovered by hand."""
+    dst = f"{path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+    n = 1
+    while os.path.exists(dst):
+        n += 1
+        dst = f"{path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}-{n}"
+    try:
+        os.replace(path, dst)
+        msg = f"{os.path.basename(path)} couldn't be read ({why}); kept it as {os.path.basename(dst)}"
+    except OSError as e:
+        msg = f"{os.path.basename(path)} couldn't be read ({why}) or set aside ({e})"
+    file_log(msg)
+    if log:
+        log(msg)
+
+
+def _set_aside_config(why):
+    set_aside(CONFIG_PATH, why)
+
+
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))
     try:
-        with open(CONFIG_PATH, encoding="utf-8") as fh:
-            d = json.load(fh)
+        for attempt in range(10):           # locked for a moment (antivirus, backup): wait rather than lose it
+            try:
+                with open(CONFIG_PATH, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                break
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.3)
         if isinstance(d, dict):
             cfg.update(d)
             if d and "simple_view" not in d:
                 cfg["simple_view"] = False      # an existing install keeps every tab it had (switch with the button)
-    except Exception:
+        else:
+            _set_aside_config("not a settings object")
+    except FileNotFoundError:
         pass
+    except (OSError, ValueError) as e:
+        if os.path.exists(CONFIG_PATH) and not isinstance(e, PermissionError):
+            _set_aside_config(f"{type(e).__name__}: {e}")
+        else:
+            file_log(f"config.json couldn't be read: {type(e).__name__}: {e}")
+    for k in SECRET_KEYS:
+        cfg[k] = open_secret(cfg.get(k)) or ""
     _sane_config(cfg)
     if cfg.get("ptt_device") is not None and cfg.get("ptt_button") is not None and "ptt" not in cfg["buttons"]:
         cfg["buttons"]["ptt"] = {"device": cfg["ptt_device"], "guid": None, "index": 0, "button": cfg["ptt_button"]}
@@ -469,11 +557,46 @@ def save_config(cfg):
     so two saves can't interleave and a crash mid-write can't leave a broken config.json."""
     with _CFG_LOCK:
         os.makedirs(APP_DIR, exist_ok=True)
-        text = json.dumps(cfg, indent=2)
-        tmp = f"{CONFIG_PATH}.{threading.get_ident()}.tmp"
+        for attempt in range(5):        # another thread changing a setting mid-copy: copy again
+            try:
+                snap = json.loads(json.dumps(cfg))
+                break
+            except RuntimeError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.01)
+        for k in SECRET_KEYS:
+            if snap.get(k):
+                snap[k] = seal_secret(snap[k])
+        write_file_atomic(CONFIG_PATH, json.dumps(snap, indent=2))
+
+
+def save_config_async(cfg):
+    """save_config in the background, for threads that mustn't wait on the disk (telemetry)."""
+    def run():
+        try:
+            save_config(cfg)
+        except Exception as e:
+            file_log(f"Couldn't save the settings: {type(e).__name__}: {e}")
+    threading.Thread(target=run, daemon=True, name="save-config").start()
+
+
+def write_file_atomic(path, text):
+    """Write text to path so that a crash or power cut leaves either the old file or the new one, never a torn or
+    empty one: write a temp file, flush it to disk, then swap it in."""
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(text)
-        os.replace(tmp, CONFIG_PATH)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 
@@ -2993,9 +3116,10 @@ class F1Reader(_UDPReader):
         self.session, self.race_laps, self.time_left, self.rain = None, 0, None, None
         self.rain_in_10 = self.rain_in_30 = None
         self.fia_flag = self.sc = None
-        self._sess_ok = True
+        self._sess_ok = False           # no frames until a session packet says which track this is
         self.position, self.gap_ahead, self.gap_behind = 0, None, None
         self.fuel, self.fuel_cap, self.wear = 0.0, 0.0, None
+        self.max_rpm, self.wheel_kmh = 0.0, None
         self.pos, self.right, self.others, self.others_meta, self.cars = None, None, None, None, 0
         self.participants = {}
         self.car_positions = {}
@@ -3032,6 +3156,7 @@ class F1Reader(_UDPReader):
         self.race_over = False
         self.position, self.gap_ahead, self.gap_behind, self.cars = 0, None, None, 0
         self.fuel, self.fuel_cap = 0.0, 0.0
+        self.max_rpm, self.wheel_kmh = 0.0, None
         self.pos, self.right, self.wear, self.others, self.others_meta = None, None, None, None, None
         self.participants, self.car_positions = {}, {}
         self.car_ahead = self.car_behind = None
@@ -3099,8 +3224,19 @@ class F1Reader(_UDPReader):
             o = 29 + me * per
             if per >= 17 and o + 17 <= len(d):
                 self.fuel, self.fuel_cap = _U_2f(d, o + 5)
+            if per >= 19 and o + 19 <= len(d):
+                mr = _U_H(d, o + 17)[0]          # m_maxRPM: shift-point and rev-limiter analysis
+                self.max_rpm = float(mr) if 3000 <= mr <= 25000 else 0.0
             if per >= 29 and o + 29 <= len(d):
                 self.fia_flag = {2: "blue", 3: "yellow"}.get(_U_b(d, o + 28)[0])
+            return None
+        if pid == 13:
+            # Motion Ex (player car): m_wheelSpeed[4] in m/s at +48 (RL, RR, FL, FR): lock-ups and wheelspin
+            if len(d) >= 29 + 64:
+                rl, rr, fl, fr = _U_4f(d, 29 + 48)
+                w = [abs(x) * 3.6 for x in (fl, fr, rl, rr)]
+                self.wheel_kmh = w if all(math.isfinite(x) and x < 600 for x in w) else None
+                self._wk_t = time.monotonic()
             return None
         if pid == 10:
             per = (len(d) - 29) // 22
@@ -3190,7 +3326,9 @@ class F1Reader(_UDPReader):
         my_team = self.participants.get(me, ("", "F1 car"))[1]
         fr = Frame("F1 25", self.track, my_team, laps_done, max(0.0, lapdist) / L % 1.0, float(speed),
                    thr, brk, steer, gear, float(rpm), cur_ms / 1000.0, last_ms / 1000.0, pit != 0, False,
-                   self.fuel, self.track_len, [t_fl, t_fr, t_rl, t_rr], 0.0, None, [p_fl, p_fr, p_rl, p_rr],
+                   self.fuel, self.track_len, [t_fl, t_fr, t_rl, t_rr], self.max_rpm,
+                   self.wheel_kmh if time.monotonic() - getattr(self, "_wk_t", -9.0) < 0.3 else None,  # fresh only
+                   [p_fl, p_fr, p_rl, p_rr],
                    lap_invalid=invalid != 0)
         fr.session, fr.race_laps, fr.time_left, fr.rain = self.session, self.race_laps, self.time_left, self.rain
         fr.rain_in_10, fr.rain_in_30 = self.rain_in_10, self.rain_in_30
@@ -3525,6 +3663,21 @@ class Voice:
                     fh.write(resp.read())
 
     _KOKORO_MIN = {"kokoro-v1.0.int8.onnx": 50_000_000, "voices-v1.0.bin": 20_000_000}
+    # SHA-256 of the model-files-v1.0 release files: nothing else is loaded as the voice model
+    _KOKORO_SHA = {"kokoro-v1.0.int8.onnx": "6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb",
+                   "voices-v1.0.bin": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"}
+
+    def _kokoro_ok(self, path, name):
+        """The file is exactly the published Kokoro model file `name`."""
+        import hashlib
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+        except OSError:
+            return False
+        return h.hexdigest() == self._KOKORO_SHA[name]
 
     def _kokoro_paths(self):
         kdir = os.path.join(APP_DIR, "kokoro")
@@ -3548,6 +3701,12 @@ class Voice:
                 shutil.copyfile(src, tmp)
             except OSError:
                 return False
+        if not self._kokoro_ok(tmp, name):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return False
         self.log(f"Kokoro: using SimCast's copy of {name} (no download needed).")
         return True
 
@@ -3572,6 +3731,9 @@ class Voice:
                 if os.path.getsize(tmp) < self._KOKORO_MIN[os.path.basename(dst)]:
                     os.remove(tmp)
                     raise RuntimeError(f"download of {os.path.basename(dst)} was incomplete")
+                if not self._kokoro_ok(tmp, os.path.basename(dst)):
+                    os.remove(tmp)
+                    raise RuntimeError(f"{os.path.basename(dst)} didn't match its published checksum")
                 os.replace(tmp, dst)
             self.log("Kokoro voice model ready.")
         except Exception as e:
@@ -4632,13 +4794,14 @@ class Listener:
     def _on_audio(self, d, _frames, _t, _status):
         """Capture callback: keeps the pre-roll ring filled and measures the level for the meter."""
         block = d[:, 0].copy()
-        self._preroll.append(block)
         lv = float(min(1.0, max(-block.min(), block.max()) if len(block) else 0.0))
         self.level = lv
         if lv > self.peak:
             self.peak = lv
         if self.state == "listening":
             self._chunks.append(block)
+        else:                                   # the ring holds only audio from before the press
+            self._preroll.append(block)
 
     def _run(self):
         try:
@@ -4683,6 +4846,8 @@ class Listener:
     def _clip(self, np, sd, kb, online):
         """One push-to-talk press: record until release (or the cap), then transcribe."""
         self.voice.hold.set()
+        pre = list(self._preroll)               # the moment before the press (the first syllable is often early)
+        self._chunks = []
         self.state = "listening"
         try:
             api = self._ensure_stream(sd)
@@ -4693,7 +4858,6 @@ class Listener:
             while self._held(kb):
                 time.sleep(0.05)
             return
-        self._chunks = []
         self.peak = 0.0
         with_lock = getattr(self._preroll, "maxlen", 0)
         self._event(rc_ptt=True, rc_api=api or "default", rc_preroll=with_lock)
@@ -4705,11 +4869,11 @@ class Listener:
         self.level = 0.0
         self._event(rc_ptt=False, rc_clip_s=held)
         self.state = "ready"
-        if not chunks and not self._preroll:
+        self._preroll.clear()                   # the next press's pre-roll starts after this one
+        if not chunks and not pre:
             self._event(rc_fail=("mic", "No sound came from the microphone. Check it in Settings."))
             return
-        clip = np.concatenate([np.concatenate(list(self._preroll))] + chunks) if chunks else \
-            np.concatenate(list(self._preroll))
+        clip = np.concatenate(pre + chunks)
         audio = prep_speech(np, clip, self._rate or SPEECH_RATE, self.cfg.get("mic_gain", 1.0))
         if audio is None or len(audio) < SPEECH_RATE * 0.25:
             self._event(rc_fail=("mic", "Too short. Keep holding the button while you speak."))
@@ -5017,6 +5181,17 @@ class Overlay:
 
     def _pump(self):
         try:
+            self._pump_once()
+        except Exception:                       # one bad update must not stop the overlay for good
+            file_log("Overlay update failed: " + traceback.format_exc())
+        finally:
+            try:
+                self.root.after(100, self._pump)
+            except Exception:
+                pass                            # window closed
+
+    def _pump_once(self):
+        try:
             while True:
                 kw = self.inbox.get_nowait()
                 if any(k in kw for k in ("setup_sheet", "setup_close", "setup_toggle")):
@@ -5028,7 +5203,6 @@ class Overlay:
                         self.vars[k].set(v)
         except queue.Empty:
             pass
-        self.root.after(100, self._pump)
 
     def run(self):
         self.root.mainloop()
@@ -6860,11 +7034,16 @@ class Coach:
     def load(self):
         try:
             self._adopt_raceroom_legacy()
-            with open(self._path(), encoding="utf-8") as fh:
-                d = json.load(fh)
+            try:
+                with open(self._path(), encoding="utf-8") as fh:
+                    d = json.load(fh)
+            except ValueError as e:              # torn or corrupt: keep it rather than overwrite it with a new lap
+                set_aside(self._path(), e, self.log)
+                return False
             prob = ref_problem(d, need_key=False)
             if prob:
                 self.log(f"Saved reference ignored: {prob}.")
+                set_aside(self._path(), prob)
                 return False
             corners = [tuple(c) for c in d["corners"]]
             best_corner = {int(k): v for k, v in d["best_corner"].items()}
@@ -6904,7 +7083,6 @@ class Coach:
         seq = Coach._SAVE_N
 
         def write():
-            tmp = path + ".tmp"
             try:
                 with Coach._SAVE_LOCK:
                     if gen != self._ref_gen or seq < Coach._SAVED.get(path, 0):
@@ -6915,18 +7093,7 @@ class Coach:
                     if ref and _np is not None:
                         data["ref"] = {k: (_np.round(_np.asarray(v, dtype=float), 3).tolist()
                                            if k in ("speed", "thr", "brk", "t", "steer") else v) for k, v in ref.items()}
-                    text = json.dumps(data, separators=(",", ":"))
-                    try:
-                        with open(tmp, "w", encoding="utf-8") as fh:
-                            fh.write(text)
-                        os.replace(tmp, path)
-                    except Exception:
-                        try:
-                            if os.path.exists(tmp):
-                                os.remove(tmp)
-                        except Exception:
-                            pass
-                        raise
+                    write_file_atomic(path, json.dumps(data, separators=(",", ":")))
             except Exception as e:
                 self.log(f"Couldn't save the reference: {e}")
         threading.Thread(target=write, daemon=True, name="save-ref").start()
@@ -6946,6 +7113,13 @@ class Coach:
                 eb.setdefault(b_idx, []).append(item)
         self._exit_bins = eb
         self._state_rev += 1
+        if getattr(self, "goals", None):        # corners re-mapped (new reference): keep goals on the same corners
+            old_ci = {id(g): g["ci"] for g in self.goals}
+            self.goals = remap_goals(self.goals, self.corners)
+            moved = {old_ci.get(g.get("_src")): g["ci"] for g in self.goals}
+            self._goals_said = {moved[ci] for ci in getattr(self, "_goals_said", ()) if ci in moved}
+            for g in self.goals:
+                g.pop("_src", None)
 
     def _big_stops(self, n):
         """The n corners with the biggest speed drop on the reference: where most lap time usually is.
@@ -7196,12 +7370,21 @@ class Coach:
         return self._path().replace(".json", ".sessions.json")
 
     def past_sessions(self):
+        sp = self._sessions_path()
         try:
-            with open(self._sessions_path(), encoding="utf-8") as fh:
+            with open(sp, encoding="utf-8") as fh:
                 d = json.load(fh)
-            return [x for x in d if isinstance(x, dict)] if isinstance(d, list) else []
+        except FileNotFoundError:
+            return []
+        except ValueError as e:                 # torn or corrupt: keep it, don't overwrite the history
+            set_aside(sp, e, self.log)
+            return []
         except Exception:
             return []
+        if not isinstance(d, list):
+            set_aside(sp, "not a list of sessions", self.log)
+            return []
+        return [x for x in d if isinstance(x, dict)]
 
     def _session_entry(self, best_t, times, ref_t, clean):
         """One row of the progress history: best lap, laps, and how the session went against the target."""
@@ -7285,22 +7468,12 @@ class Coach:
                 sess.append(entry)
             try:
                 os.makedirs(self.store_dir, exist_ok=True)
-                sp = self._sessions_path()
-                stmp = sp + ".tmp"
-                try:
-                    with open(stmp, "w", encoding="utf-8") as fh:
-                        json.dump(sess[-50:], fh)
-                    os.replace(stmp, sp)
-                except Exception:
-                    if os.path.exists(stmp):
-                        try:
-                            os.remove(stmp)
-                        except Exception:
-                            pass
-                    raise
+                write_file_atomic(self._sessions_path(), json.dumps(sess[-50:]))
                 path = write_report(self, sess, existing_path=self._session_report_path)
-            except OSError as e:
+            except Exception as e:             # never let a report problem stall the session (it's retried later)
                 self.log(f"Couldn't write the coach report: {e}")
+                if not isinstance(e, OSError):
+                    file_log("end_session: " + traceback.format_exc())
                 return getattr(self, "last_report", None)
             self._session_report_path = path
             self.history_reported = len(self.history)
@@ -9659,17 +9832,18 @@ class Crew:
 
     def _first_session_today(self, f):
         """True for the first session today with this car at this track (and remembers it)."""
-        d = self.cfg.get("briefed")
-        if not isinstance(d, dict):
-            d = self.cfg["briefed"] = {}
         key, today = f"{f.game}|{f.track}|{f.car}", time.strftime("%Y-%m-%d")
-        if d.get(key) == today:
-            return False
-        for k in [k for k, v in d.items() if v != today]:
-            d.pop(k, None)
-        d[key] = today
+        with _CFG_LOCK:                          # the GUI thread saves the settings too
+            d = self.cfg.get("briefed")
+            if not isinstance(d, dict):
+                d = self.cfg["briefed"] = {}
+            if d.get(key) == today:
+                return False
+            for k in [k for k, v in d.items() if v != today]:
+                d.pop(k, None)
+            d[key] = today
         if f.game != "TEST":
-            save_config(self.cfg)
+            save_config_async(self.cfg)          # not on the telemetry thread: a slow disk mustn't stall it
         return True
 
     def intros(self, f, now):
@@ -10652,6 +10826,21 @@ def carry_goals(sessions, corners):
                 kept.append(dict(g, ci=ci, apex=apex, avg=avg, date=s.get("date")))
         return kept
     return []
+
+
+def remap_goals(goals, corners):
+    """Goals moved onto the same corners after the corners were re-mapped (a new reference lap numbers them
+    afresh): each goal follows its apex to the nearest corner; a goal whose corner no longer exists is dropped."""
+    out = []
+    for g in goals or []:
+        best = None
+        for ci, c in enumerate(corners):
+            d = abs(int(c[1]) - int(g["apex"]))
+            if d <= GOAL_APEX_TOL and (best is None or d < best[0]):
+                best = (d, ci)
+        if best is not None and best[1] not in {x["ci"] for x in out}:
+            out.append(dict(g, ci=best[1], _src=id(g)))
+    return out
 
 
 def goal_progress(coach):
@@ -13571,7 +13760,9 @@ def _ver_tuple(v):
 
 def check_latest_release(timeout=8.0):
     """The newest published release when it's newer than this copy, else None:
-    {"tag", "version", "url" (release page), "notes", "installer_url"}. Raises on network errors."""
+    {"tag", "version", "url" (release page), "notes", "installer_url", "installer_sha256"}. installer_sha256 is the
+    SHA-256 GitHub publishes for the release's SimCoach-Setup.exe, or None (then the update can't be installed from
+    inside the app, only from the release page). Raises on network errors."""
     import urllib.request
     req = urllib.request.Request(f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
                                  headers={"Accept": "application/vnd.github+json",
@@ -13581,12 +13772,13 @@ def check_latest_release(timeout=8.0):
     tag = str(d.get("tag_name") or "")
     if not tag or d.get("draft") or d.get("prerelease") or _ver_tuple(tag) <= _ver_tuple(APP_VERSION):
         return None
-    asset = next((a.get("browser_download_url") for a in d.get("assets") or []
-                  if str(a.get("name", "")).lower() == "simcoach-setup.exe"), None)
+    asset = next((a for a in d.get("assets") or [] if str(a.get("name", "")).lower() == "simcoach-setup.exe"), {})
+    m = re.fullmatch(r"sha256:([0-9a-fA-F]{64})", str(asset.get("digest") or ""))
     ver = tag.lstrip("vV")
     return {"tag": tag, "version": ver, "url": d.get("html_url") or f"https://github.com/{UPDATE_REPO}/releases/latest",
             "notes": str(d.get("body") or "")[:2000],
-            "installer_url": asset or f"https://github.com/{UPDATE_REPO}/raw/{tag}/SimCoach-Setup.exe"}
+            "installer_url": asset.get("browser_download_url") or None,
+            "installer_sha256": m.group(1).lower() if m and asset.get("browser_download_url") else None}
 
 
 LIBRARY_URL = f"https://raw.githubusercontent.com/{UPDATE_REPO}/main/references/"
@@ -13795,10 +13987,22 @@ GITHUB_CLIENT_ID = "Ov23litlosIIZII412tg"
 BEST_DIR = os.path.join(REPORT_DIR, "Best laps")
 
 
+_LIB_TOP_KEYS = ("key", "ref", "best_time", "corners", "best_corner", "saved", "provisional", "source")
+_LIB_REF_KEYS = ("speed", "thr", "brk", "t", "steer", "lock", "spin", "overlap")
+_LIB_CORNER_KEYS = ("bp", "min_speed", "tp", "coast", "seg", "peak_brake", "trail", "lock", "spin", "overlap",
+                    "corrections")
+
+
 def share_payload(d):
-    """The exact bytes a lap is shared as: the reference marked as a library lap, compact JSON. The same lap always
-    gives the same bytes, so its git fingerprint tells whether the library already has it."""
-    out = dict(d)
+    """The exact bytes a lap is shared as: the reference marked as a library lap, compact JSON, with only the fields
+    SimCoach uses (anything else a file carries is dropped). The same lap always gives the same bytes, so its git
+    fingerprint tells whether the library already has it."""
+    out = {k: d[k] for k in _LIB_TOP_KEYS if k in d}
+    if isinstance(out.get("ref"), dict):
+        out["ref"] = {k: out["ref"][k] for k in _LIB_REF_KEYS if k in out["ref"]}
+    if isinstance(out.get("best_corner"), dict):
+        out["best_corner"] = {ci: ({k: v[k] for k in _LIB_CORNER_KEYS if k in v} if isinstance(v, dict) else v)
+                              for ci, v in out["best_corner"].items()}
     out["source"] = "library"
     out["provisional"] = False
     return json.dumps(out, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -13869,6 +14073,8 @@ def library_submission_problem(d, name, current=None):
     t, spd = ref["t"], ref["speed"]
     if not 15.0 <= bt <= 1800.0:
         return "lap time out of range"
+    if not all(math.isfinite(x) for name in ("speed", "thr", "brk", "t") for x in ref[name]):
+        return "a lap trace has a missing (NaN) value"
     if not (min(spd) >= 0 and max(spd) <= 500):
         return "speed trace out of range"
     if t[0] > 5.0 or not (0.8 * bt <= t[-1] <= bt + 2.0):
@@ -14088,9 +14294,14 @@ def installed_copy():
         return False
 
 
-def download_installer(url, dest, progress=None, timeout=30.0):
-    """Download the installer to dest and check it really is a Windows program (not an error page)."""
+def download_installer(url, dest, sha256, progress=None, timeout=30.0):
+    """Download the installer to dest and check it is exactly the file the release published: its SHA-256 must match
+    the checksum GitHub gives for the release asset (sha256), so nothing else is ever run as an update."""
+    import hashlib
     import urllib.request
+    if not (isinstance(sha256, str) and re.fullmatch(r"[0-9a-fA-F]{64}", sha256)):
+        raise ValueError("the release has no checksum for its installer")
+    digest = hashlib.sha256()
     req = urllib.request.Request(url, headers={"User-Agent": f"SimCoach/{APP_VERSION}"})
     tmp = dest + ".part"
     got = 0
@@ -14101,6 +14312,7 @@ def download_installer(url, dest, progress=None, timeout=30.0):
             if not chunk:
                 break
             fh.write(chunk)
+            digest.update(chunk)
             got += len(chunk)
             if progress:
                 progress(got, total)
@@ -14109,6 +14321,9 @@ def download_installer(url, dest, progress=None, timeout=30.0):
     if head != b"MZ" or got < 500_000 or (total and got != total):
         os.remove(tmp)
         raise ValueError("the download wasn't a complete SimCoach installer")
+    if digest.hexdigest() != sha256.lower():
+        os.remove(tmp)
+        raise ValueError("the installer didn't match the release's published checksum, so it wasn't run")
     os.replace(tmp, dest)
     return dest
 
@@ -16236,13 +16451,19 @@ class App:
         info = self.update_info
         if not info or getattr(self, "_updating", False):
             return
+        if not (info.get("installer_url") and info.get("installer_sha256")):
+            try:
+                os.startfile(info["url"])        # no checksummed installer: get it from the release page
+            except Exception:
+                pass
+            return
         self._updating = True
         self.update_btn.configure(state="disabled")
         dest = os.path.join(tempfile.gettempdir(), f"SimCoach-Setup-{_RE_SAFE_REPORT.sub('_', info['tag'])}.exe")
 
         def work():
             try:
-                download_installer(info["installer_url"], dest,
+                download_installer(info["installer_url"], dest, info["installer_sha256"],
                                    progress=lambda got, total: self.post(update_progress=(got, total)))
                 self.post(update_progress="run")
                 import subprocess
@@ -16447,8 +16668,21 @@ class App:
     def toggle(self):
         self.stop_coach() if self.running else self.start_coach()
 
+    def _telemetry_stopped(self, wait):
+        """True once the previous telemetry thread has really finished (it may still be writing the report)."""
+        th = getattr(self, "_tel_thread", None)
+        if th is not None and th.is_alive() and th is not threading.current_thread():
+            th.join(timeout=wait)
+            if th.is_alive():
+                return False
+        self._tel_thread = None
+        return True
+
     def start_coach(self):
         if self.running:
+            return
+        if not self._telemetry_stopped(5.0):     # never two telemetry threads on the same sim readers
+            self.log("Still finishing the last session; press Start again in a moment.")
             return
         self.save_settings(quiet=True)
         self.ensure_listener()
@@ -16480,10 +16714,7 @@ class App:
     def stop_coach(self):
         if self.stop:
             self.stop.set()
-        th = getattr(self, "_tel_thread", None)
-        if th is not None and th.is_alive() and th is not threading.current_thread():
-            th.join(timeout=1.0)
-        self._tel_thread = None
+        self._telemetry_stopped(1.0)             # still busy (writing the report)? start_coach waits for it
         path = self.coach.end_session()
         with self.coach.lock:
             self.coach.key = None
@@ -17125,6 +17356,10 @@ class App:
         self.root.destroy()
 
     def _close_readers(self):
+        if not self._telemetry_stopped(3.0):
+            # the telemetry thread is still reading them: unmapping shared memory under it would crash SimCoach
+            self._readers_stale = True
+            return
         for r_ in self.readers or ():
             try:
                 r_.close()
@@ -17140,6 +17375,20 @@ class App:
         return cls._RE_PRETTY_TIME.sub(r"\1:\2", text).replace("k p h", "km/h")
 
     def _pump(self):
+        try:
+            self._pump_once()
+        except Exception:                       # one bad update must not freeze the window for good
+            n = getattr(self, "_pump_errors", 0) + 1
+            self._pump_errors = n
+            if n <= 20 or n % 500 == 0:
+                file_log(f"Window update failed ({n}): " + traceback.format_exc())
+        finally:
+            try:
+                self.root.after(80, self._pump)
+            except Exception:
+                pass                            # window closed
+
+    def _pump_once(self):
         merged, sheet_events = {}, []
         try:
             for _ in range(20):
@@ -17275,12 +17524,21 @@ class App:
                                                    if l_state == "starting" else ""))
                 self.rc_meter.coords(self.rc_bar, 0, 0, bar_w, 14)
                 self.rc_meter.itemconfigure(self.rc_bar, fill=bar_col)
-        self.root.after(80, self._pump)
 
     def _refresh_tables(self):
         """The one periodic refresh chain (scheduled once from __init__)."""
-        self._refresh_tables_now()
-        self.root.after(1000, self._refresh_tables)
+        try:
+            self._refresh_tables_now()
+        except Exception:
+            n = getattr(self, "_refresh_errors", 0) + 1
+            self._refresh_errors = n
+            if n <= 20 or n % 500 == 0:
+                file_log(f"Table refresh failed ({n}): " + traceback.format_exc())
+        finally:
+            try:
+                self.root.after(1000, self._refresh_tables)
+            except Exception:
+                pass
 
     def _refresh_tables_now(self, force=False):
         c = self.coach
@@ -17780,6 +18038,13 @@ def coach_loop(coach, readers, stop, test=False):
         except Exception as e:
             coach.log(f"Read error: {e}")
             active = None
+            try:                                # same clean-up as a sim closing: no stale delta, capture closed
+                coach.clear_delta()
+                coach.end_session()             # safe to repeat: the session continues if the sim comes back
+                if cap is not None:
+                    cap.finish("read error")
+            except Exception:
+                file_log("Clean-up after a read error failed: " + traceback.format_exc())
             stop.wait(1)
             continue
         now = clock if test else time.monotonic()

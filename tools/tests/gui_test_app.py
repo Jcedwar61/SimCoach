@@ -20,7 +20,7 @@ cfg.update(auto_start=False, gemini_api_key="gk", ai_provider="gemini", coach_pe
 orig_start = sc.SecondScreen.start
 sc.SecondScreen.start = lambda self, port, host="0.0.0.0": orig_start(self, port, "127.0.0.1")   # tests: loopback only
 FAKE = {"tag": "v99.0", "version": "99.0", "url": "https://example.invalid/release", "notes": "",
-        "installer_url": "https://example.invalid/SimCoach-Setup.exe"}
+        "installer_url": "https://example.invalid/SimCoach-Setup.exe", "installer_sha256": "0" * 64}
 sc.check_latest_release = lambda timeout=8.0: FAKE
 import tempfile                                                         # noqa: E402
 sc.REF_DIR, sc.BEST_DIR = tempfile.mkdtemp(), os.path.join(tempfile.mkdtemp(), "Best laps")
@@ -40,7 +40,7 @@ def pump(secs=0.3):
     end = time.time() + secs
     while time.time() < end:
         root.update()
-        app._pump()
+        app._pump_once()          # errors surface here (the scheduled _pump only logs them)
         root.update()
         time.sleep(0.02)
 

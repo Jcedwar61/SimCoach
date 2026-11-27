@@ -77,7 +77,15 @@ try {
                     $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
                     $bin = Join-Path $env:USERPROFILE '.local\bin'
                     $zip = Join-Path $env:TEMP 'simcoach-uv.zip'
-                    Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-$arch-pc-windows-msvc.zip" -OutFile $zip
+                    # A fixed uv release, checked against its published SHA-256 before anything in it is used
+                    $uvVer = '0.11.32'
+                    $uvSha = @{ 'x86_64' = 'ACFDE570451CFDB8689FA159A138EE805BA4E241C466432750302C86254B0984'
+                                'aarch64' = 'A7427EA0440BB826B6716D1837FF3D173B8E7D496CB09EE8F456B4E023A2FDCD' }
+                    Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/download/$uvVer/uv-$arch-pc-windows-msvc.zip" -OutFile $zip
+                    if ((Get-FileHash -Algorithm SHA256 -Path $zip).Hash -ne $uvSha[$arch]) {
+                        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+                        throw 'the uv download did not match its published checksum, so it was not used'
+                    }
                     New-Item -ItemType Directory -Force -Path $bin | Out-Null
                     Expand-Archive -Force -Path $zip -DestinationPath $bin
                     Remove-Item $zip -Force -ErrorAction SilentlyContinue

@@ -9,7 +9,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 VERSION="$(tr -d '\r' < "$REPO/sim_coach.py" | sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p')"  # CRLF-safe (Windows checkouts)
 [ -n "$VERSION" ] || { echo "APP_VERSION not found in sim_coach.py"; exit 1; }
 IFS=. read -r a b c d <<<"$VERSION"; VIVERSION="${a:-0}.${b:-0}.${c:-0}.${d:-0}"
-FILES=(sim_coach.py SimCoach.exe SimCoach.ico SimCoach.bat run_coach.bat bind_push_to_talk.bat README.txt
+FILES=(sim_coach.py sim_coach.py.lock SimCoach.exe SimCoach.ico SimCoach.bat run_coach.bat bind_push_to_talk.bat README.txt
        simhub/SimCoach.SimHub.dll simhub/install.ps1 simhub/README.md
        simhub/dashboard/SimCoach/SimCoach.djson simhub/dashboard/SimCoach/SimCoach.djson.metadata)
 cp "$REPO/installer-source/simcoach.nsi" "$REPO/installer-source/install.ps1" "$WORK/"
