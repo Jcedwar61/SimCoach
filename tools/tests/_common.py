@@ -18,7 +18,7 @@ def load(path=None):
     sys.modules["sc"] = sc
     spec.loader.exec_module(sc)
     sc.REPORT_DIR = tempfile.mkdtemp(prefix="simcoach-test-reports-")
-    sc.save_config = lambda cfg: None
+    sc.real_save_config, sc.save_config = sc.save_config, (lambda cfg: None)
     return sc
 
 

@@ -140,9 +140,9 @@ On track: live coaching & voice commands
   - Best laps tab: your best lap for every sim / track / car, kept ready to share in Documents\SimCoach
     Reports\Best laps, with its library status (Not shared / Sent, waiting for approval / In the library).
     Share selected or Share all new uploads them to the library from the app: the first time, sign in to
-    GitHub with the code SimCoach shows. Laps are checked and added to the library automatically within a
-    minute or two (only if faster than the library's lap for that car and track). Shared: sim, track, car
-    and the lap trace only.
+    GitHub with the code SimCoach shows. Laps are checked on GitHub within a minute or two (only a lap faster
+    than the library's lap for that car and track gets in) and go into the library once the owner approves
+    them. Shared: sim, track, car and the lap trace only.
   - SimCoach reference library: the first time you drive a sim / track / car with no lap of your own, SimCoach
     checks the shared library (the references folder of SimCoach's GitHub repository) for a lap with exactly
     that sim, track and car, and coaches you against it until you beat it. Share your own laps with
@@ -279,12 +279,14 @@ Tabs & settings
       and SimCoach.CoachLine, .NewBestLap and .GoalDone are events for LEDs and ShakeIt. Everything stays on
       this PC. Details: simhub\README.md.
     * Updates: "Tell me when an update is out" (on by default) checks GitHub for a newer SimCoach at start-up
-      and every 12 hours. A banner offers Install update (downloads the new SimCoach-Setup.exe and runs it;
+      and every 12 hours. A banner offers Install update (downloads the new SimCoach-Setup.exe, checks it
+      against the checksum GitHub publishes for the release, and runs it;
       it closes SimCoach, saves your session and keeps your settings), What's new, or Not now (skips that
       version). If you run SimCoach from the zip folder instead of the installer, it offers Download.
       "Check now" checks straight away.
     * Conversation (AI): pick the AI provider (OpenAI, Google Gemini or DeepSeek), paste its API key and
-      click "Test key". Keys are stored locally in %APPDATA%\SimCoach\config.json (or set the
+      click "Test key". Keys are stored in %APPDATA%\SimCoach\config.json, encrypted so that only your
+      Windows account on this PC can read them (or set the
       OPENAI_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY environment variable). With "try my other keys"
       ticked, if the chosen provider is down or busy SimCoach asks the next one you have a key for.
       Online speech recognition always uses the OpenAI key.

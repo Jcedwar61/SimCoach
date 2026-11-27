@@ -15,9 +15,12 @@ own lap for a combination is never replaced.
    `Documents\SimCoach Reports\Best laps`.
 2. In SimCoach: **Best laps** tab, select the lap, **Share selected** (or **Share all new**). The first time,
    sign in to GitHub with the code SimCoach shows (free account; your password never goes through SimCoach).
-3. The lap goes into the library automatically within a minute or two, and every SimCoach picks it up at its
-   next library check. (The owner's laps are committed straight in. Everyone else's are sent as a pull request
-   that `.github/workflows/library-auto-add.yml` checks and adds by itself; nobody has to approve it.)
+3. The lap is checked on GitHub within a minute or two, and every SimCoach picks it up at its next library check
+   once it's in. The owner's and collaborators' laps are committed straight in. Everyone else's are sent as a
+   pull request that `.github/workflows/library-auto-add.yml` checks; a lap that passes waits (labelled
+   `library-review`) until the owner adds the `library-approved` label, then goes in by itself. Every lap in the
+   library is used by every SimCoach, so a person vouches for each one. Regular contributors can be trusted
+   without approval by adding their GitHub login to the `LIBRARY_TRUSTED` repository variable (comma-separated).
 
 ## What gets in (checked by the app and again on GitHub)
 
@@ -26,6 +29,7 @@ own lap for a combination is never replaced.
 * **Faster than the library's lap** for that sim, track and car, if it has one. So the library always holds the
   fastest shared lap.
 
+Laps are written into the library as SimCoach's own lap data only: any other fields a file carries are dropped.
 Pull requests that change anything outside the lap files are left for the owner.
 
 Without in-app sign-in, **Share selected** opens this folder's upload page on GitHub and the Best laps folder:

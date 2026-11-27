@@ -27,7 +27,7 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_iracing | iRacing reader against a synthetic SDK memory image |
 | test_starter_laps | starter laps: track matching, car classes, lap times, line-up, replacement, mismatch drop |
 | test_reference_library | shared library downloads (local stand-in for GitHub) and the coach flow |
-| test_library_review | GitHub-side checker that adds shared laps (faster / slower / broken / mismatched / non-lap PRs) |
+| test_library_review | GitHub-side checker that adds shared laps (faster / slower / broken / mismatched / non-lap PRs; strangers' laps wait for the owner's `library-approved` label; only canonical lap data is written) |
 | test_share_laps | Best laps folder, library fingerprint, GitHub code sign-in, owner commit vs fork + pull request (local stand-in) |
 | test_ac_setup_live | Assetto Corsa setup sheet: runs the in-game helper's real Lua code (needs `pip install lupa`) against a stand-in for CSP: apply, revert, pits rule, missing settings, radio command |
 | test_session_goals | goals carried from one session to the next: chosen corners, opening call, "Goal done", radio answer, report, AI data; Simple view default for new and existing configs |
@@ -35,11 +35,12 @@ Needs `numpy`, `openai` and `pyflakes` (and `tkinter` for `--gui`).
 | test_raceroom | RaceRoom car names and classes, target times there, moving references saved under "car <id>" |
 | test_benchmarks | benchmark lap times by sim / class / car: selection, starter-lap tuning, target announcements, library file |
 | test_library_tracks | starter-lap track shapes from the library: checks, download, use, removal |
+| test_data_safety | unreadable settings, session history or reference set aside instead of overwritten; saves while another thread changes settings; keys encrypted (Windows) or passed through; goals follow re-mapped corners; F1 session / max RPM / wheel speeds |
 | test_library_sync | automatic library import: new / changed / unchanged / bad files, own laps kept, live adoption |
 | test_simcast_link / test_kokoro_share | SimCast link packets (frozen v1 bytes); Kokoro model reused from SimCast's folder |
 | test_session_repeat / test_lap_talk | once-a-day briefing, skip / full briefing; short debriefs, fair coaching |
 | reference library files | every lap in `references/` is valid (`tools/references/check_library.py`) |
-| net_test_update_check | update check, installer download (`--network`) |
+| net_test_update_check | update check, installer download checked against the release's published SHA-256 (`--network`) |
 | gui_test_app | Settings, Simple view, welcome box, setup sheet confirm, overlay SETUP button, phone page, update banner (`--gui`) |
 
 ## Releasing a new version

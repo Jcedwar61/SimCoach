@@ -7,7 +7,7 @@ corners that matter, a diagnosis as you exit them, one thing to work on after ea
 when you stop. Then it carries your weakest corner into the next session as a goal and tells you when you've
 fixed it.
 
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.22)](SimCoach-Setup.exe)**: free, no admin rights needed
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.23)](SimCoach-Setup.exe)**: free, no admin rights needed
 * **[Latest release & full ZIP](../../releases/latest)**
 * **[▶️ Watch the preview video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -66,6 +66,26 @@ with SimHub.
 The full guide is in [README.txt](README.txt), every release's changes in [CHANGELOG.md](CHANGELOG.md), the
 library's rules in [references/](references/), developer tools and the release checklist in [tools/](tools/),
 and third-party data credits in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.23
+* **Safer updates and downloads:** Install update now checks the new SimCoach-Setup.exe against the checksum
+  GitHub publishes for the release before running it. The setup wizard installs a fixed, checksum-checked uv
+  and SimCoach's Python packages from a lock file with checksums (`sim_coach.py.lock`), and the Kokoro voice
+  model is checked against its published checksum too.
+* **Your keys are encrypted:** AI keys and the GitHub sign-in are saved encrypted with Windows' own per-user
+  encryption, so a copy of `config.json` is no use on another PC or account. Existing keys are encrypted the
+  next time settings are saved.
+* **Nothing lost to a crash or power cut:** settings, session history and reference laps are flushed to disk
+  before they replace the old file. A file that can't be read is kept as `.corrupt-<time>` instead of being
+  overwritten, so your keys, button bindings, history and best laps can always be recovered.
+* **Shared library:** laps from drivers the repository doesn't know wait for the owner's approval before every
+  SimCoach downloads them, and only lap data is ever written into the library.
+* **Fixes:** push-to-talk no longer repeats the end of what you said at the start of the clip; one bad update can
+  no longer freeze the window or the overlay; Stop and Start in quick succession can no longer run two telemetry
+  readers at once (a possible crash); settings saved while a session starts no longer risk an error; today's
+  goal stays on the right corner when the corners are re-mapped; a read error clears the delta and finishes a
+  capture like a closed sim; F1 25 gets shift-point, rev-limiter, lock-up and wheelspin coaching (max RPM and
+  wheel speeds are now read) and no longer starts a stray "F1 circuit" session before the track is known.
 
 ### What's new in 6.22
 * **SimCoach on your SimHub screens:** a SimHub plugin and a four-screen **SimCoach dashboard** put the coaching

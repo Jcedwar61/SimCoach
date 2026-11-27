@@ -1,6 +1,7 @@
 """The GitHub-side checker (tools/references/review_submission.py) against a local stand-in for GitHub: good laps
 are written into the library and the pull request closed with a note; slower, broken or mismatched laps are
-refused with the reason; pull requests that touch anything else are left alone."""
+refused with the reason; pull requests that touch anything else are left alone. Laps from people the repository
+doesn't trust wait for the owner's "library-approved" label, and only canonical lap data is ever written."""
 import base64
 import importlib.util
 import json
@@ -46,7 +47,8 @@ class H(BaseHTTPRequestHandler):
         m = re.fullmatch(rf"/repos/{REPO}/pulls/(\d+)", self.path)
         if m:
             p = prs[int(m.group(1))]
-            return self.reply(200, {"state": p["state"], "user": {"login": "speedy"}, "base": {"ref": "main"},
+            return self.reply(200, {"state": p["state"], "user": {"login": p.get("login", "speedy")},
+                                    "author_association": p.get("assoc", "COLLABORATOR"), "base": {"ref": "main"},
                                     "head": {"sha": f"h{m.group(1)}", "repo": {"full_name": FORK}}})
         m = re.fullmatch(rf"/repos/{REPO}/pulls/(\d+)/files\?per_page=100", self.path)
         if m:
@@ -69,6 +71,10 @@ class H(BaseHTTPRequestHandler):
         self.reply(201, {})
 
     def do_POST(self):
+        m = re.fullmatch(rf"/repos/{REPO}/issues/(\d+)/labels", self.path)
+        if m:
+            prs[int(m.group(1))].setdefault("labels", []).extend(self.body()["labels"])
+            return self.reply(200, [])
         m = re.fullmatch(rf"/repos/{REPO}/issues/(\d+)/comments", self.path)
         prs[int(m.group(1))]["comments"].append(self.body()["body"])
         self.reply(201, {})
@@ -92,12 +98,12 @@ B = ("LMU", "spa", "hypercar")
 nA, nB = sc.library_file_name(A), sc.library_file_name(B)
 
 
-def submit(n, entries, other=None):
+def submit(n, entries, other=None, assoc="COLLABORATOR", approved_sha=None, login="speedy"):
     prs[n] = {"files": [(f"references/{name}", st) for name, st, _ in entries] + (other or []),
-              "state": "open", "comments": []}
+              "state": "open", "comments": [], "assoc": assoc, "login": login}
     for name, _st, data in entries:
         files[(FORK, f"h{n}", f"references/{name}")] = data
-    return rv.review(n)
+    return rv.review(n, approved_sha=approved_sha)
 
 
 r = submit(1, [(nA, "added", lap(A, 138.2))])
@@ -128,4 +134,35 @@ check(r == "skipped" and prs[7]["state"] == "open" and not prs[7]["comments"], "
 r = submit(8, [(nB, "added", lap(B, 140.0)), (sc.library_file_name(("x", "y", "z")), "removed", b"")])
 check(r == "partly" and (REPO, "main", f"references/{nB}") in files and "only adding" in prs[8]["comments"][0],
       "mixed PR: good lap added, deletion refused")
+
+# Someone the repository doesn't know: a good lap waits for the owner
+C = ("AMS2", "interlagos", "gt3_gen2")
+nC = sc.library_file_name(C)
+r = submit(9, [(nC, "added", lap(C, 139.0))], assoc="NONE", login="stranger")
+check(r == "waiting" and (REPO, "main", f"references/{nC}") not in files, "stranger's lap not written by itself")
+check(prs[9]["state"] == "open" and "library-review" in prs[9].get("labels", [])
+      and "library-approved" in prs[9]["comments"][0], "left open, labelled, with how to approve it")
+r = submit(10, [(nC, "added", lap(C, 139.0))], assoc="NONE", login="stranger", approved_sha="old-commit")
+check(r == "waiting", "an approval of an earlier commit doesn't count")
+r = submit(11, [(nC, "added", lap(C, 139.0))], assoc="NONE", login="stranger", approved_sha="h11")
+check(r == "added" and (REPO, "main", f"references/{nC}") in files, "owner's approval adds it")
+os.environ["LIBRARY_TRUSTED"] = "Regular, other"
+D = ("AMS2", "interlagos", "gt4")
+r = submit(12, [(sc.library_file_name(D), "added", lap(D, 139.0))], assoc="NONE", login="regular")
+check(r == "added", "logins in LIBRARY_TRUSTED are trusted")
+os.environ.pop("LIBRARY_TRUSTED")
+
+# Only lap data gets in: extra fields are dropped, missing values refused
+E = ("AMS2", "interlagos", "f_ultimate")
+nE = sc.library_file_name(E)
+padded = json.loads(lap(E, 139.0))
+padded["junk"] = "x" * 1000
+padded["ref"]["junk"] = [1, 2, 3]
+r = submit(13, [(nE, "added", json.dumps(padded).encode())])
+stored = json.loads(files[(REPO, "main", f"references/{nE}")])
+check(r == "added" and "junk" not in stored and "junk" not in stored["ref"], "extra fields stripped before writing")
+holey = json.loads(lap(B, 141.0))
+holey["ref"]["speed"][10] = float("nan")
+r = submit(14, [(nB, "added", json.dumps(holey).encode())])
+check(r == "refused" and "NaN" in prs[14]["comments"][0], "NaN in a lap trace refused")
 done()

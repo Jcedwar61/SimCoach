@@ -13,7 +13,7 @@ WORK="$(mktemp -d)"; trap 'git -C "$REPO" worktree remove --force "$WORK/src" >/
 git worktree add -q --detach "$WORK/src" "$REF"
 S="$WORK/src"; Z="$WORK/zip/SimCoach"
 mkdir -p "$Z/installer-source" "$(dirname "$OUT")"
-cp "$S"/{sim_coach.py,README.txt,SimCoach.exe,SimCoach-Setup.exe,SimCoach.ico,SimCoach.bat,run_coach.bat,bind_push_to_talk.bat,sample_coach_report.html,LICENSE} "$Z/"
+cp "$S"/{sim_coach.py,sim_coach.py.lock,README.txt,SimCoach.exe,SimCoach-Setup.exe,SimCoach.ico,SimCoach.bat,run_coach.bat,bind_push_to_talk.bat,sample_coach_report.html,LICENSE} "$Z/"
 "$PY" "$REPO/tools/release/export_csp_app.py" "$S/sim_coach.py" "$Z" >/dev/null   # the AC helper, as SimCoach installs it
 cp -r "$S"/installer-source/. "$Z/installer-source/"
 if [ -d "$S/simhub" ]; then mkdir -p "$Z/simhub"; cp -r "$S"/simhub/. "$Z/simhub/"; fi   # SimHub plugin + dashboard
