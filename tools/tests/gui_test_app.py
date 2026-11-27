@@ -328,6 +328,35 @@ def run():
         app.post(goal="Today's goal  ·  Turn 5: 0.12s a lap quicker so far")
         pump()
         check("Turn 5" in app.goal_lbl.cget("text"), "the session goal shows on the Live tab")
+
+        # SimHub dashboards: the feed carries the live coaching state, and dashboard buttons reach the app
+        check(app.simhub is not None, "the SimHub link is on by default")
+        app.post(delta="-0.42", delta_color="#66bb6a", tip="Turn 3, brake 10 metres later.", heard="You: what's my goal")
+        pump()
+        sd = app._simhub_data()
+        check(sd["delta_s"] == -0.42 and sd["delta_text"] == "-0.42", f"delta as a number and as text ({sd.get('delta_s')})")
+        check(sd["coach"] == "Turn 3, brake 10 metres later." and sd["coach_age"] is not None and sd["coach_age"] < 5,
+              "the coach's last line and how fresh it is")
+        check("Turn 5" in (sd["goal"] or "") and sd["heard"] == "You: what's my goal", "goal and what the coach heard")
+        check(sd["muted"] is False and sd["tones"] == cfg.get("brake_callouts", "focus") and sd["talking"] is False,
+              "mute, braking tones and talking state")
+        for k in ("corners", "laps", "goals", "worst", "focus_turns", "best", "target", "pace_pct", "cons_label"):
+            check(k in sd, f"lap data key {k}")
+        json.dumps(sd)
+        raw = app.simhub.packet()
+        check(len(raw) <= sc.SimHubLink.MAX_BYTES and json.loads(raw)["magic"] == "SIMCOACH-SIMHUB",
+              "the whole snapshot fits one datagram")
+        before = cfg.get("talk_level", 1)
+        app._simhub_cmd("mute")
+        pump()
+        check((cfg.get("talk_level", 1) == 0) != (before == 0), "a dashboard Mute button mutes the coach")
+        app._simhub_cmd("mute")
+        pump()
+        check((cfg.get("talk_level", 1) == 0) == (before == 0), "and a second press unmutes")
+        app.vars["simhub_link"].set(False)
+        app.cfg["simhub_link"] = False
+        app._apply_simhub_link()
+        check(app.simhub is None, "switching it off in Settings stops the link")
     except Exception:
         import traceback
         traceback.print_exc()

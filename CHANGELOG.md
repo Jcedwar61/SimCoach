@@ -2,6 +2,15 @@
 
 Every release, newest first. The README has the latest one.
 
+## What's new in 6.22
+* **SimCoach on your SimHub screens:** a SimHub plugin and a four-screen **SimCoach dashboard** put the coaching
+  on a wheel display, tablet, phone or overlay: delta with a gain/loss bar, the coach's last call, focus corners,
+  today's goal, pace against the target, consistency, where the time went last lap, recent laps, goal progress
+  and ON AIR / MUTED / TONES OFF lights. Touch buttons, or any button SimHub reads, repeat the last call, mute,
+  switch braking tones, the overlay, the setup sheet or a capture, and hold-to-talk works too. Every value is a
+  `SimCoach.*` property for your own dashboards and LED effects. Install with `simhub\install.ps1`; see
+  [simhub/](simhub/). Nothing leaves your PC.
+
 ## What's new in 6.21
 * **Closes cleanly:** quitting SimCoach no longer trips a wheel-button error ("video system not initialized")
   and briefly restarts the controller scan while it shuts down; the button reader now stops first.
