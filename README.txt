@@ -267,7 +267,7 @@ Tabs & settings
       The same switch is the "Phone / tablet live screen" tick box in Settings. Read-only: nothing on the page can change SimCoach. Windows may ask once to allow SimCoach
       on private networks. Crew banter never holds up urgent calls: an urgent call cuts it short.
     * SimHub dashboard: "Send coaching to SimHub dashboards" (Settings, on by default) feeds SimCoach's
-      plugin for SimHub. Install it once with simhub\install.ps1 from the SimCoach download (it copies the
+      plugin for SimHub. Install it once with simhub\install.ps1 in SimCoach's folder (it copies the
       plugin and the SimCoach dashboard into SimHub), then restart SimHub. The dashboard has four screens:
       Waiting (status, today's goal, target lap), Coach (big delta with a gain/loss bar, the coach's last
       call lit up while it's new, focus corners, goal, lap / last / best / theoretical, pace against the

@@ -7,7 +7,7 @@ corners that matter, a diagnosis as you exit them, one thing to work on after ea
 when you stop. Then it carries your weakest corner into the next session as a goal and tells you when you've
 fixed it.
 
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.21)](SimCoach-Setup.exe)**: free, no admin rights needed
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.22)](SimCoach-Setup.exe)**: free, no admin rights needed
 * **[Latest release & full ZIP](../../releases/latest)**
 * **[▶️ Watch the preview video (1080p MP4)](simcoach_preview.mp4)**
 

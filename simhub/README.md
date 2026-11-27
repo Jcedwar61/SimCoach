@@ -15,7 +15,7 @@ control the coach.
 
 1. SimCoach 6.22 or later. *Send coaching to SimHub dashboards* is on by default (Settings; it's one of the
    settings *Show everything* shows).
-2. Run, from this folder:
+2. Run, from SimCoach's folder (the installer puts this `simhub` folder there):
    ```powershell
    powershell -ExecutionPolicy Bypass -File simhub\install.ps1 -Restart
    ```
