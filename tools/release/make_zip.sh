@@ -16,6 +16,7 @@ mkdir -p "$Z/installer-source" "$(dirname "$OUT")"
 cp "$S"/{sim_coach.py,README.txt,SimCoach.exe,SimCoach-Setup.exe,SimCoach.ico,SimCoach.bat,run_coach.bat,bind_push_to_talk.bat,sample_coach_report.html,LICENSE} "$Z/"
 "$PY" "$REPO/tools/release/export_csp_app.py" "$S/sim_coach.py" "$Z" >/dev/null   # the AC helper, as SimCoach installs it
 cp -r "$S"/installer-source/. "$Z/installer-source/"
+if [ -d "$S/simhub" ]; then mkdir -p "$Z/simhub"; cp -r "$S"/simhub/. "$Z/simhub/"; fi   # SimHub plugin + dashboard
 if [ -f "$S/THIRD_PARTY_NOTICES.md" ]; then cp "$S/THIRD_PARTY_NOTICES.md" "$Z/"; mkdir -p "$Z/licenses"; cp "$S"/licenses/* "$Z/licenses/"; fi
 mkdir -p "$WORK/check"; 7z x -y -o"$WORK/check" "$Z/SimCoach-Setup.exe" sim_coach.py >/dev/null
 cmp -s "$WORK/check/sim_coach.py" "$Z/sim_coach.py" || { echo "The installer at $REF doesn't carry its sim_coach.py: rebuild it."; exit 1; }

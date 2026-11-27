@@ -266,6 +266,18 @@ Tabs & settings
       position, gaps, fuel and the coach's last call. "Test on this PC" opens the same page in your browser.
       The same switch is the "Phone / tablet live screen" tick box in Settings. Read-only: nothing on the page can change SimCoach. Windows may ask once to allow SimCoach
       on private networks. Crew banter never holds up urgent calls: an urgent call cuts it short.
+    * SimHub dashboard: "Send coaching to SimHub dashboards" (Settings, on by default) feeds SimCoach's
+      plugin for SimHub. Install it once with simhub\install.ps1 in SimCoach's folder (it copies the
+      plugin and the SimCoach dashboard into SimHub), then restart SimHub. The dashboard has four screens:
+      Waiting (status, today's goal, target lap), Coach (big delta with a gain/loss bar, the coach's last
+      call lit up while it's new, focus corners, goal, lap / last / best / theoretical, pace against the
+      target, consistency, position, gaps, fuel, and ON AIR / LISTENING / MUTED / TONES OFF lights),
+      Corners & laps (where the time went last lap, recent laps, goal progress) and Controls (touch buttons:
+      repeat, mute, braking tones, overlay, setup sheet, data capture). In SimHub's Controls and events you
+      can map SimCoach.Repeat, .Mute, .BrakeTones, .Overlay, .SetupSheet, .Capture and the SimCoach.PushToTalk
+      input to any button SimHub sees; every value is also a SimCoach.* property for your own dashboards,
+      and SimCoach.CoachLine, .NewBestLap and .GoalDone are events for LEDs and ShakeIt. Everything stays on
+      this PC. Details: simhub\README.md.
     * Updates: "Tell me when an update is out" (on by default) checks GitHub for a newer SimCoach at start-up
       and every 12 hours. A banner offers Install update (downloads the new SimCoach-Setup.exe and runs it;
       it closes SimCoach, saves your session and keeps your settings), What's new, or Not now (skips that

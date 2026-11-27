@@ -69,7 +69,7 @@ except Exception:
     _np = None
 from typing import Optional
 
-APP_VERSION = "6.21"
+APP_VERSION = "6.22"
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "SimCoach")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "simcoach.log")
@@ -111,6 +111,7 @@ DEFAULT_CONFIG = {
     "f1_port": 20777,
     "dr2_port": 20779,
     "udp_share_simhub": True,
+    "simhub_link": True,
     "engineer_on": True,
     "strategist_on": True,
     "spotter_on": True,
@@ -4026,6 +4027,9 @@ BUTTON_ACTIONS = [("ptt", "Push-to-talk (hold)"), ("repeat", "Repeat last messag
 
 
 SIMCAST_LINK_PORT = 47317                        # localhost only; SimCast listens here (simcast/link.py)
+SIMHUB_LINK_PORT = 47318                         # localhost only; SimCoach's SimHub plugin listens here (simhub/)
+SIMHUB_CMD_PORT = 47319                          # localhost only; the SimHub plugin sends button presses here
+SIMHUB_COMMANDS = ("repeat", "mute", "tones", "overlay", "capture", "sheet", "ptt")   # what a dashboard may ask for
 
 
 class SimCastLink:
@@ -4082,6 +4086,126 @@ class SimCastLink:
                 self.step()
             except Exception:
                 pass
+
+
+class SimHubLink:
+    """Feeds SimHub dashboards. Ten times a second this sends one JSON datagram with what the coach knows (delta,
+    the coach's last line, focus corners, goals, pace against the target, corner losses, recent laps...) to SimCoach's
+    SimHub plugin on this PC, which turns it into SimCoach.* properties for DashStudio, LEDs and overlays. The
+    plugin sends button presses back (repeat, mute, braking tones, overlay, capture, setup sheet, push-to-talk) as
+    "SIMCOACH-CMD 1 <action> [down|up]"; only those harmless actions are accepted, and only from this PC.
+
+    The wire format is a contract with simhub/plugin/SimCoachPlugin.cs: see docs/simhub-link.md before changing it."""
+
+    MAGIC, VERSION, EVERY, MAX_BYTES = "SIMCOACH-SIMHUB", 1, 0.1, 8000
+
+    def __init__(self, snapshot, on_command, port=SIMHUB_LINK_PORT, cmd_port=SIMHUB_CMD_PORT, log=print, start=True):
+        self.snapshot, self.on_command, self.log = snapshot, on_command, log
+        self.addr = ("127.0.0.1", int(port))
+        self.seq = 0
+        self._stop = threading.Event()
+        self.tx = self.rx = None
+        try:
+            self.tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        except OSError:
+            pass
+        if cmd_port is not None:
+            try:
+                rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                rx.bind(("127.0.0.1", int(cmd_port)))
+                rx.settimeout(self.EVERY)
+                self.rx = rx
+            except OSError as e:
+                self.log(f"SimHub buttons unavailable (port {cmd_port}: {e}); dashboards still get the data.")
+        if start:
+            threading.Thread(target=self._run, daemon=True, name="simhub-link").start()
+
+    def packet(self):
+        """One datagram: the snapshot with the magic word, link version and a sequence number in front."""
+        self.seq = (self.seq + 1) % 1_000_000_000
+        d = {"magic": self.MAGIC, "v": self.VERSION, "seq": self.seq}
+        d.update(self.snapshot() or {})
+        raw = json.dumps(d, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+        for k in ("corners", "laps", "goals"):       # far beyond any real session, but never exceed one datagram
+            if len(raw) <= self.MAX_BYTES:
+                break
+            d.pop(k, None)
+            raw = json.dumps(d, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+        return raw
+
+    def send(self):
+        if self.tx is None:
+            return
+        try:
+            self.tx.sendto(self.packet(), self.addr)
+        except OSError:
+            pass                                  # nothing listening: SimHub closed, that's fine
+
+    @staticmethod
+    def parse_command(data):
+        """b"SIMCOACH-CMD 1 mute" -> ("mute", None); b"SIMCOACH-CMD 1 ptt down" -> ("ptt", "down"). Anything else,
+        including an unknown action, -> None. Later link versions may add words; they're ignored."""
+        try:
+            w = data.decode("ascii").strip().split()
+        except (UnicodeDecodeError, AttributeError):
+            return None
+        if len(w) < 3 or w[0] != "SIMCOACH-CMD" or not w[1].isdigit() or int(w[1]) < 1:
+            return None
+        action = w[2].lower()
+        if action not in SIMHUB_COMMANDS:
+            return None
+        arg = w[3].lower() if len(w) > 3 else None
+        if action == "ptt" and arg not in ("down", "up"):
+            return None
+        return action, (arg if action == "ptt" else None)
+
+    def _listen(self):
+        """Waits up to EVERY for a button press; doubles as the send timer."""
+        if self.rx is None:
+            time.sleep(self.EVERY)
+            return
+        try:
+            data, (host, _port) = self.rx.recvfrom(256)
+        except (socket.timeout, OSError):
+            return
+        if host != "127.0.0.1":
+            return
+        cmd = self.parse_command(data)
+        if cmd is not None:
+            try:
+                self.on_command(*cmd)
+            except Exception as e:
+                self.log(f"SimHub button {cmd[0]} failed: {e}")
+
+    def _run(self):
+        nxt = 0.0
+        while not self._stop.is_set():
+            now = time.monotonic()
+            if now >= nxt:
+                nxt = now + self.EVERY
+                try:
+                    self.send()
+                except Exception:
+                    pass
+            self._listen()
+
+    def stop(self):
+        self._stop.set()
+        for s in (self.rx, self.tx):
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+        self.rx = self.tx = None
+
+
+def _clock(s):
+    """Seconds as a lap time for a dashboard: 83.4567 -> "1:23.457"; None stays None."""
+    if s is None or s != s or s <= 0:
+        return None
+    m, r = divmod(round(float(s), 3), 60)
+    return f"{int(m)}:{r:06.3f}" if m else f"{r:.3f}"
 
 
 class Controls:
@@ -14187,6 +14311,9 @@ class App:
             self.cfg["second_screen_token"] = secrets.token_urlsafe(9)
             save_config(self.cfg)
         self.screen = SecondScreen(self._screen_data, self.log, self.cfg["second_screen_token"])
+        self.simhub = None
+        self._simhub_q: "queue.Queue[tuple]" = queue.Queue()
+        self._apply_simhub_link()
         self.update_info = None
         r.after(6000, self._update_tick)
         r.after(15000, self._library_tick)
@@ -15192,6 +15319,11 @@ class App:
                              variable=self.vars["udp_share_simhub"])
         w_.pack(anchor="w", pady=(4, 0))
         self._adv(w_)
+        self.vars["simhub_link"] = tk.BooleanVar(value=bool(self.cfg.get("simhub_link", True)))
+        w_ = ttk.Checkbutton(c, text="Send coaching to SimHub dashboards (needs the SimCoach plugin for SimHub)",
+                             variable=self.vars["simhub_link"])
+        w_.pack(anchor="w", pady=(4, 0))
+        self._adv(w_)
         self.vars["second_screen"] = tk.BooleanVar(value=bool(self.cfg.get("second_screen")))
         w_ = ttk.Checkbutton(c, text="Phone / tablet live screen (see the Phone screen button up top)",
                              variable=self.vars["second_screen"])
@@ -15865,8 +15997,10 @@ class App:
 
     def post(self, **kw):
         live = self.__dict__.setdefault("_live", {})
-        for k in ("delta", "delta_color", "focus", "tip"):
+        for k in ("delta", "delta_color", "focus", "tip", "goal", "head", "heard"):
             if k in kw:
+                if k in ("tip", "heard") and kw[k] and kw[k] != live.get(k):
+                    live[k + "_t"] = time.monotonic()     # when it changed: dashboards highlight a fresh line
                 live[k] = kw[k]
         self.inbox.put(kw)
 
@@ -15896,6 +16030,105 @@ class App:
                  gap_ahead=f.gap_ahead, gap_behind=f.gap_behind, speed=int(round(f.speed)), gear=f.gear,
                  fuel=(f"{f.fuel:.1f} {'kg' if f.game in KG_FUEL_GAMES else 'L'}" if f.fuel > 0 else None),
                  fuel_laps=(int(f.fuel / fpl) if (fpl and f.fuel > 0) else None))
+        return d
+
+    # --- SimHub dashboards (simhub/ and docs/simhub-link.md) ---------------------------------------------------
+    def _apply_simhub_link(self):
+        on = bool(self.cfg.get("simhub_link", True))
+        if on and self.simhub is None:
+            self.simhub = SimHubLink(self._simhub_data, self._simhub_cmd, log=self.log)
+        elif not on and self.simhub is not None:
+            self.simhub.stop()
+            self.simhub = None
+
+    def _simhub_cmd(self, action, arg=None):
+        """A dashboard or SimHub-mapped button (link thread): handled on the window's thread in _pump."""
+        self._simhub_q.put((action, arg))
+
+    def _simhub_do(self, action, arg=None):
+        if action == "ptt":
+            self._ptt(arg == "down")
+            return
+        if action == "overlay":
+            self.toggle_overlay()
+            return
+        if action == "sheet":
+            self.post(setup_toggle=True)
+            return
+        fn = {"repeat": self._btn_repeat, "mute": self._btn_mute, "tones": self._btn_tones,
+              "capture": self._btn_capture}.get(action)
+        if fn is not None:
+            fn()
+
+    def _simhub_laps(self):
+        """The lap-by-lap part of the SimHub feed. It only changes when a lap or corner does, so it's worked out
+        once per change rather than ten times a second."""
+        c = self.coach
+        with c.lock:
+            rev = (c.key, len(c.history), c.best_time, len(c.corners), c._state_rev, len(c.focus), bool(c.drill))
+            cached = getattr(self, "_simhub_cache", None)
+            if cached is not None and cached[0] == rev:
+                return cached[1]
+            hist = [(h["time"], bool(h.get("invalid")), bool(h.get("pit"))) for h in c.history]
+            best = None if c.ref_provisional else c.best_time
+            clean = [t_ for t_, inv, pit in hist if not inv and not pit]
+            if best is None and hist:
+                best = min(clean or [t_ for t_, _, _ in hist])
+            tb, tg = c.theoretical_best(), c.target()
+            corners = []
+            last_c = c.history[-1]["corners"] if c.history else {}
+            for ci in range(len(c.corners)):
+                b, last = c.best_corner.get(ci, {}), last_c.get(ci)
+                loss = (round(last["seg"] - b["seg"], 3) if last and ok(last.get("seg")) and ok(b.get("seg"))
+                        else None)
+                corners.append({"turn": ci + 1, "loss": loss, "issue": c.last_issue.get(ci, (None, None))[1]})
+            focus = [ci + 1 for ci, _ in c.focus]
+            drill = ({"turn": c.drill["ci"] + 1, "lap": c.drill["done"] + 1, "of": c.drill["laps"]}
+                     if c.drill else None)
+            try:
+                goals = [{"turn": g["ci"] + 1, "change": None if g["change"] is None else round(g["change"], 3),
+                          "laps": g["n"], "done": bool(g["done"]), "last_loss": round(g.get("loss") or 0, 3)}
+                         for g in goal_progress(c)]
+            except Exception:
+                goals = []
+        cons = consistency_of(clean)
+        laps = [{"n": n, "time": _clock(t_), "s": round(t_, 3), "gap": round(t_ - best, 3) if best else None,
+                 "pit": pit, "invalid": inv} for n, (t_, inv, pit) in enumerate(hist, 1)][-8:]
+        out = {"laps_done": len(hist), "last_s": round(hist[-1][0], 3) if hist else None,
+               "last": _clock(hist[-1][0]) if hist else None,
+               "best_s": round(best, 3) if best else None, "best": _clock(best),
+               "theo_s": round(tb, 3) if tb else None, "theo": _clock(tb),
+               "target_s": round(tg[0], 3) if tg else None, "target": _clock(tg[0]) if tg else None,
+               "pace_pct": round(c.pace_pct(best), 2) if (best and tg) else None,
+               "cons_sd": round(cons["sd"], 3) if cons else None, "cons_label": cons["label"] if cons else None,
+               "focus_turns": focus, "drill": drill, "goals": goals, "corners": corners, "laps": laps,
+               "worst": [x for x in sorted((x for x in corners if x["loss"] is not None and x["loss"] > 0),
+                                           key=lambda x: -x["loss"])][:5]}
+        self._simhub_cache = (rev, out)
+        return out
+
+    def _simhub_data(self):
+        """Everything a SimHub dashboard shows (sent ten times a second by SimHubLink)."""
+        d = self._screen_data()
+        live, now = dict(getattr(self, "_live", {})), time.monotonic()
+        try:
+            delta = float(live.get("delta"))
+        except (TypeError, ValueError):
+            delta = None
+
+        def text(k):
+            x = live.get(k)
+            return self._pretty(str(x)) if x else None
+        d.update(running=bool(self.running), delta_s=delta, delta_text=d.pop("delta", "--.--"),
+                 goal=text("goal"), status=text("head"), heard=text("heard"),
+                 coach_age=round(now - live["tip_t"], 1) if live.get("tip_t") else None,
+                 heard_age=round(now - live["heard_t"], 1) if live.get("heard_t") else None,
+                 talking=bool(self.voice.audible()), muted=self.cfg.get("talk_level", 1) == 0,
+                 tones=str(self.cfg.get("brake_callouts", "focus")),
+                 mic=getattr(self.listener, "state", None) if self.listener is not None else None,
+                 driver=self.cfg.get("driver_name") or None)
+        d.pop("delta_color", None)
+        d.update(self._simhub_laps())
         return d
 
     # --- updates -----------------------------------------------------------------------------------------------
@@ -16407,6 +16640,8 @@ class App:
         self.cfg["briefing_mode"] = dict(BRIEFING_MODES).get(v["briefing_mode"].get(), "daily")
         self.cfg["sheet_autopop"] = bool(v["sheet_autopop"].get())
         self.cfg["udp_share_simhub"] = bool(v["udp_share_simhub"].get())
+        self.cfg["simhub_link"] = bool(v["simhub_link"].get())
+        self._apply_simhub_link()
         self.cfg["second_screen"] = bool(v["second_screen"].get())
         self.cfg["check_updates"] = bool(v["check_updates"].get())
         _UDPPort.share = self.cfg["udp_share_simhub"]
@@ -16880,6 +17115,8 @@ class App:
             self.screen.stop()
         except Exception:
             pass
+        if self.simhub is not None:
+            self.simhub.stop()
         if self.listener is not None:
             self.listener.stop.set()
         if self.running:
@@ -16904,6 +17141,11 @@ class App:
 
     def _pump(self):
         merged, sheet_events = {}, []
+        try:
+            for _ in range(20):
+                self._simhub_do(*self._simhub_q.get_nowait())
+        except queue.Empty:
+            pass
         try:
             for _ in range(200):
                 kw = self.inbox.get_nowait()

@@ -5,7 +5,7 @@ name: Installer (Windows)
 
 on:
   pull_request:
-    paths: ["installer-source/**", "SimCoach-Setup.exe", "SimCoach.exe", "sim_coach.py", ".github/workflows/installer-windows.yml"]
+    paths: ["installer-source/**", "SimCoach-Setup.exe", "SimCoach.exe", "sim_coach.py", "simhub/**", ".github/workflows/installer-windows.yml"]
   workflow_dispatch:
 
 permissions:
@@ -38,7 +38,7 @@ jobs:
           $inst = (Get-ItemProperty $key).InstallLocation
           "Installed to $inst (exit code $($p.ExitCode))"
           Get-Content "$inst\install.log" -ErrorAction SilentlyContinue | Select-Object -Last 40
-          foreach ($f in 'sim_coach.py', 'SimCoach.exe', 'install.ps1', 'Uninstall SimCoach.exe') {
+          foreach ($f in 'sim_coach.py', 'SimCoach.exe', 'install.ps1', 'Uninstall SimCoach.exe', 'simhub\SimCoach.SimHub.dll', 'simhub\install.ps1', 'simhub\dashboard\SimCoach\SimCoach.djson') {
             if (-not (Test-Path "$inst\$f")) { "Missing $f"; exit 1 }
           }
           if (-not (Select-String -Path "$inst\install.log" -Pattern 'Ready\.' -Quiet)) { 'The downloads did not finish'; exit 1 }

@@ -7,7 +7,7 @@ corners that matter, a diagnosis as you exit them, one thing to work on after ea
 when you stop. Then it carries your weakest corner into the next session as a goal and tells you when you've
 fixed it.
 
-* **[Download SimCoach-Setup.exe (Windows Installer, v6.21)](SimCoach-Setup.exe)**: free, no admin rights needed
+* **[Download SimCoach-Setup.exe (Windows Installer, v6.22)](SimCoach-Setup.exe)**: free, no admin rights needed
 * **[Latest release & full ZIP](../../releases/latest)**
 * **[▶️ Watch the preview video (1080p MP4)](simcoach_preview.mp4)**
 
@@ -57,6 +57,7 @@ with SimHub.
   share your own best laps in one click (free GitHub sign-in).
 * **Overlay and phone screen:** a click-through overlay with delta and pedal traces, and a live page for a
   phone or tablet on the same Wi-Fi.
+* **SimHub dashboard:** the coaching on any SimHub screen, with buttons for the coach; see [simhub/](simhub/).
 * **Talk to it:** push-to-talk with offline speech recognition; optional AI answers, banter, setup briefings
   and commands in your own words through OpenAI, Google Gemini or DeepSeek, with automatic fallback.
 * **Works with [SimCast](https://github.com/Jcedwar61/SimCast):** its TV commentary drops under the coach and
@@ -65,6 +66,15 @@ with SimHub.
 The full guide is in [README.txt](README.txt), every release's changes in [CHANGELOG.md](CHANGELOG.md), the
 library's rules in [references/](references/), developer tools and the release checklist in [tools/](tools/),
 and third-party data credits in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### What's new in 6.22
+* **SimCoach on your SimHub screens:** a SimHub plugin and a four-screen **SimCoach dashboard** put the coaching
+  on a wheel display, tablet, phone or overlay: delta with a gain/loss bar, the coach's last call, focus corners,
+  today's goal, pace against the target, consistency, where the time went last lap, recent laps, goal progress
+  and ON AIR / MUTED / TONES OFF lights. Touch buttons, or any button SimHub reads, repeat the last call, mute,
+  switch braking tones, the overlay, the setup sheet or a capture, and hold-to-talk works too. Every value is a
+  `SimCoach.*` property for your own dashboards and LED effects. Install with `simhub\install.ps1`; see
+  [simhub/](simhub/). Nothing leaves your PC.
 
 ### What's new in 6.21
 * **Closes cleanly:** quitting SimCoach no longer trips a wheel-button error ("video system not initialized")
